@@ -115,6 +115,7 @@ export const xAdapter: PlatformAdapter = {
       isQuote: !!quote,
       isReply: /Replying to\s*@/.test(article.innerText),
       isPromoted: xAdapter.isPromoted(article),
+      isSuggested: false,
     };
   },
 };

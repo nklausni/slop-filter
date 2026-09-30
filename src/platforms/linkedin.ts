@@ -15,6 +15,24 @@ const SDUI_CARD = 'div[role="listitem"][componentkey^="update-card-focus"]';
 const SDUI_CARD_PREFIX = "update-card-focus";
 const SDUI_TEXT = '[data-testid="expandable-text-box"]';
 
+/**
+ * LinkedIn's ad label, English and German. Deliberately not "Werbung": the header lines
+ * include the author's headline, and "Werbung" is common in marketing people's headlines.
+ */
+export const PROMOTED_LABEL = /\b(promoted|anzeige|gesponsert)\b/i;
+
+/**
+ * LinkedIn's label above a post from an account you do not follow ("Suggested",
+ * German "Vorgeschlagen"). Matched at the START of a header line only, so a headline
+ * that merely contains the word does not count; no trailing boundary, in case the label
+ * is glued to the next node the way "Feed post" is glued to the actor's name.
+ */
+const SUGGESTED_LINE = /^(suggested|vorgeschlagen)/i;
+
+export function isSuggestedHeader(lines: string[]): boolean {
+  return lines.some((l) => SUGGESTED_LINE.test(l.trim()));
+}
+
 const POST_SELECTORS = [
   SDUI_CARD,
   'div[data-urn^="urn:li:activity:"]',
@@ -128,7 +146,8 @@ function scrapeSdui(el: HTMLElement, id: string): PostState {
     isRepost: /reposted this/.test(headerJoined),
     isQuote: false,
     isReply: false,
-    isPromoted: /\bpromoted\b/.test(headerJoined),
+    isPromoted: PROMOTED_LABEL.test(headerJoined),
+    isSuggested: isSuggestedHeader(header),
   };
 }
 
@@ -166,7 +185,8 @@ function scrapeClassic(el: HTMLElement, id: string): PostState {
       /reposted|shared this/.test(header) || !!el.querySelector(".update-components-mini-update-v2"),
     isQuote: false,
     isReply: false,
-    isPromoted: /\bpromoted\b/.test(subDesc) || /promoted/.test(header),
+    isPromoted: PROMOTED_LABEL.test(subDesc) || PROMOTED_LABEL.test(header),
+    isSuggested: isSuggestedHeader(header.split("\n")),
   };
 }
 
@@ -207,7 +227,7 @@ export const linkedinAdapter: PlatformAdapter = {
     // back to the header text above the post body — where "Promoted" ends up glued to the
     // follower count, hence a substring test rather than a line match.
     if (
-      /\bpromoted\b/i.test(
+      PROMOTED_LABEL.test(
         firstText(el, [
           ".update-components-actor__sub-description",
           ".feed-shared-actor__sub-description",
@@ -221,7 +241,7 @@ export const linkedinAdapter: PlatformAdapter = {
     const body = box ? (box.innerText.trim().split("\n")[0]?.trim() ?? "") : "";
     const lines = el.innerText.split("\n").map((l) => l.trim()).filter(Boolean);
     const cut = body ? lines.indexOf(body) : -1;
-    return /\bpromoted\b/i.test((cut >= 0 ? lines.slice(0, cut) : lines.slice(0, 8)).join(" "));
+    return PROMOTED_LABEL.test((cut >= 0 ? lines.slice(0, cut) : lines.slice(0, 8)).join(" "));
   },
 
   scrape(el, id) {

@@ -31,7 +31,11 @@ repost / media / link. What is not sent: engagement counts, author names or hand
 or anything about your browsing.
 
 Posts are **not** sent at all when they are promoted, a reply (when that option is on),
-from an allowlisted handle, or shorter than the platform's minimum length. Answers are
+from an allowlisted handle, or shorter than the platform's minimum length. On LinkedIn,
+posts labelled as ads ("Promoted", "Anzeige", "Gesponsert") or as suggested ("Suggested",
+"Vorgeschlagen") are hidden by label alone when those options are on (the default), also
+without a request. Excluded topics cannot do this: they judge the post's text, and the
+label is not part of it. Answers are
 cached per post for the browser session, so the same post is never sent twice.
 
 See TypeSafe's [terms and data handling](https://docs.typesafe.ai/legal) and OpenRouter's
@@ -328,7 +332,7 @@ Nothing leaves the browser: the log is session-scoped local storage.
 ## Tests
 
 ```bash
-npm test          # 65 unit tests, ~300ms, no API key required
+npm test          # 71 unit tests, ~300ms, no API key required
 npm run typecheck
 ```
 

@@ -140,6 +140,8 @@ export interface PostState {
   isQuote: boolean;
   isReply: boolean;
   isPromoted: boolean;
+  /** LinkedIn: carries the "Suggested" / "Vorgeschlagen" label (an account you do not follow). X: false. */
+  isSuggested: boolean;
 }
 
 export type Verdict = "hide" | "collapse" | "show" | "highlight";
@@ -168,6 +170,8 @@ export interface Evaluation {
   inputTokens: number;
   evaluatedAt: number;
   fromCache: boolean;
+  /** Set when a label rule decided without the API; the scores are then empty. */
+  rule?: "promoted" | "suggested";
 }
 
 export type Preset = "relaxed" | "balanced" | "strict";
@@ -187,6 +191,13 @@ export interface PlatformSettings {
   minPostChars: number;
   /** Replies lose their parent's context, so judgments are unreliable. */
   skipReplies: boolean;
+  /**
+   * Hide posts the platform labels as ads, without asking the API. Off, they are left
+   * alone and not evaluated.
+   */
+  hidePromoted: boolean;
+  /** Hide posts the platform labels as suggested, without asking the API. LinkedIn only. */
+  hideSuggested: boolean;
 }
 
 export interface Settings {
@@ -211,9 +222,11 @@ export interface Settings {
 export const DEFAULT_PLATFORM_SETTINGS: Record<Platform, PlatformSettings> = {
   // X posts are short by nature; 80 chars cuts roughly the bottom quarter of a real
   // timeline (measured median 206 chars).
-  x: { enabled: true, preset: "balanced", minPostChars: 80, skipReplies: true },
+  x: { enabled: true, preset: "balanced", minPostChars: 80, skipReplies: true, hidePromoted: false, hideSuggested: false },
   // LinkedIn posts are long; almost nothing legitimate lands under 120 chars.
-  linkedin: { enabled: true, preset: "balanced", minPostChars: 120, skipReplies: true },
+  // Both label rules on: before German labels were recognised, LinkedIn ads went to the
+  // API and were mostly hidden as selling. Leaving them alone now would bring them back.
+  linkedin: { enabled: true, preset: "balanced", minPostChars: 120, skipReplies: true, hidePromoted: true, hideSuggested: true },
 };
 
 export const DEFAULT_SETTINGS: Settings = {

@@ -38,7 +38,11 @@ function setStatus(el: HTMLElement, text: string, kind: "ok" | "err" | ""): void
 // The key and model inputs show whichever provider is selected; edits to the other one
 // are kept here until Save so switching back and forth loses nothing.
 let provider: Provider = "openrouter";
+/** As loaded, so settings without a control on this page (X has no label rules) survive a save. */
+let loadedPlatforms: Settings["platforms"] | null = null;
 const keyDrafts: ApiKeys = { ...EMPTY_KEYS };
+/** What is actually stored, so "Test key" can say when a working key is not saved yet. */
+const savedKeys: ApiKeys = { ...EMPTY_KEYS };
 const modelDrafts = {} as Record<Provider, string>;
 
 function stashProviderInputs(): void {
@@ -70,6 +74,7 @@ async function load(): Promise<void> {
     send<{ keys: ApiKeys }>({ kind: "get-keys" }),
   ]);
   Object.assign(keyDrafts, keys);
+  Object.assign(savedKeys, keys);
   Object.assign(modelDrafts, settings.models);
   showProvider(settings.provider);
   $<HTMLTextAreaElement>("interests").value = settings.interests.join("\n");
@@ -80,8 +85,13 @@ async function load(): Promise<void> {
   $<HTMLSelectElement>("aiStyleMode").value = settings.aiStyleMode;
   $<HTMLInputElement>("maxPostChars").value = String(settings.maxPostChars);
 
+  loadedPlatforms = settings.platforms;
   for (const p of PLATFORMS) {
     const ps = settings.platforms[p];
+    for (const k of ["hidePromoted", "hideSuggested"] as const) {
+      const box = document.getElementById(`${p}-${k}`) as HTMLInputElement | null;
+      if (box) box.checked = ps[k];
+    }
     $<HTMLInputElement>(`${p}-enabled`).checked = ps.enabled;
     $<HTMLSelectElement>(`${p}-preset`).value = ps.preset;
     $<HTMLInputElement>(`${p}-minPostChars`).value = String(ps.minPostChars);
@@ -89,8 +99,17 @@ async function load(): Promise<void> {
   }
 }
 
+/** A checkbox's state, or the loaded value when this platform has no such control. */
+function checkedOr(id: string, fallback: boolean): boolean {
+  const box = document.getElementById(id) as HTMLInputElement | null;
+  return box ? box.checked : fallback;
+}
+
 function readPlatform(p: Platform): PlatformSettings {
+  const loaded = loadedPlatforms?.[p];
   return {
+    hidePromoted: checkedOr(`${p}-hidePromoted`, loaded?.hidePromoted ?? false),
+    hideSuggested: checkedOr(`${p}-hideSuggested`, loaded?.hideSuggested ?? false),
     enabled: $<HTMLInputElement>(`${p}-enabled`).checked,
     preset: $<HTMLSelectElement>(`${p}-preset`).value as Preset,
     minPostChars: Math.max(0, Math.min(500, Number($<HTMLInputElement>(`${p}-minPostChars`).value) || 0)),
@@ -121,6 +140,7 @@ async function save(): Promise<void> {
   try {
     // Keys first: the settings save broadcasts to open feeds, which should then find a key.
     await send({ kind: "set-keys", keys: keyDrafts });
+    Object.assign(savedKeys, keyDrafts);
     await send({ kind: "set-settings", patch });
     setStatus($("saveStatus"), "Saved. Open X or LinkedIn and the feed will re-evaluate.", "ok");
   } catch (e) {
@@ -144,13 +164,16 @@ $("testKey").addEventListener("click", async () => {
   const status = $("keyStatus");
   setStatus(status, "Testing…", "");
   try {
+    const apiKey = $<HTMLInputElement>("apiKey").value.trim();
     const { message } = await send<{ message: string }>({
       kind: "test-key",
       provider,
-      apiKey: $<HTMLInputElement>("apiKey").value.trim(),
+      apiKey,
       model: $<HTMLInputElement>("model").value.trim(),
     });
-    setStatus(status, message, "ok");
+    // Testing does not store anything; say so, or the feed keeps failing without a key.
+    const unsaved = apiKey !== savedKeys[provider] ? " Not saved yet: click Save to use it." : "";
+    setStatus(status, message + unsaved, "ok");
   } catch (e) {
     setStatus(status, (e as Error).message, "err");
   }

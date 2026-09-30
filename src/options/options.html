@@ -110,6 +110,9 @@
               <input type="number" id="linkedin-minPostChars" min="0" max="500" step="5" />
             </div>
             <div class="row"><label><input type="checkbox" id="linkedin-skipReplies" /> Skip comments</label></div>
+            <div class="row"><label><input type="checkbox" id="linkedin-hideSuggested" /> Hide suggested posts (“Suggested” / “Vorgeschlagen”)</label></div>
+            <div class="row"><label><input type="checkbox" id="linkedin-hidePromoted" /> Hide ads (“Promoted” / “Anzeige”)</label></div>
+            <p class="help">Both go by LinkedIn's own label and are never sent to the API, so they cost nothing. Excluded topics cannot do this: they judge the post's text, and the label is not part of it.</p>
             <p class="help">LinkedIn posts are long by default, so the minimum sits higher and the battery includes a "no specific content at all" question that X deliberately omits.</p>
           </div>
         </div>

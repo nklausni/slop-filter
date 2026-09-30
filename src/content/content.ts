@@ -7,7 +7,7 @@
 // costs nothing and removes a whole class of "works on one, subtly broken on the other".
 
 import { ADAPTERS, detectPlatform, type PlatformAdapter } from "../platforms/index.ts";
-import type { Evaluation, Message, Platform, PlatformSettings, SessionStats, Settings, Verdict } from "../shared/types.ts";
+import type { Evaluation, Message, Platform, PlatformSettings, PostState, SessionStats, Settings, Verdict } from "../shared/types.ts";
 import { DEFAULT_PLATFORM_SETTINGS, DEFAULT_SETTINGS } from "../shared/types.ts";
 
 /** Injected by scripts/build.mjs so two builds of the same version are distinguishable. */
@@ -99,8 +99,12 @@ function send<T>(msg: unknown): Promise<T> {
 // Applying verdicts
 // ---------------------------------------------------------------------------
 
+const ERROR_TITLE_PREFIX = "Slop Filter: ";
+
 function clearDecorations(container: HTMLElement, article: HTMLElement): void {
   article.classList.remove(CLS.collapsed, CLS.highlight, CLS.revealed);
+  // Only our own error tooltip; a title the site set stays.
+  if (article.title.startsWith(ERROR_TITLE_PREFIX)) article.removeAttribute("title");
   container.classList.remove(CLS.removed, CLS.hidden);
   container.querySelectorAll(`.${CLS.badge}, .${CLS.overlay}, .${CLS.placeholder}`).forEach((n) => n.remove());
 }
@@ -155,6 +159,13 @@ function apply(container: HTMLElement, article: HTMLElement, ev: Evaluation): vo
 }
 
 function makeBadge(ev: Evaluation): HTMLElement {
+  if (ev.rule) {
+    const r = document.createElement("div");
+    r.className = `${CLS.badge} slopf-badge--${ev.verdict}`;
+    r.textContent = ev.rule === "promoted" ? "ad" : "suggested";
+    r.title = `${ev.reason}\n(label rule, not sent to the API)`;
+    return r;
+  }
   const b = document.createElement("div");
   b.className = `${CLS.badge} slopf-badge--${ev.verdict}${ev.aiStyled ? " slopf-badge--ai" : ""}`;
   // `aiStyle` is absent on evaluations cached before the AI-style axis existed.
@@ -229,6 +240,7 @@ function makeOverlay(article: HTMLElement, ev: Evaluation): HTMLElement {
  * explanation that names the wrong cause is worse than none.
  */
 function shortReason(ev: Evaluation): string {
+  if (ev.rule) return ev.reason;
   if (ev.reason.startsWith("excluded topic")) return ev.reason.split(" (")[0];
   if (ev.reason.startsWith("interest")) return ev.reason.split(" (")[0];
   const top = [...Object.entries(ev.signals), ...Object.entries(ev.structural)]
@@ -242,6 +254,39 @@ function shortReason(ev: Evaluation): string {
 // ---------------------------------------------------------------------------
 // Scan loop
 // ---------------------------------------------------------------------------
+
+/**
+ * A hide decided by the platform's own label, without the API.
+ *
+ * Excluded topics cannot do this: they judge `post.text`, and "Suggested" is a label
+ * LinkedIn puts above the post, never part of the text that is sent.
+ */
+function labelRule(post: PostState, ps: PlatformSettings): Evaluation | null {
+  const rule = ps.hidePromoted && post.isPromoted ? "promoted" : ps.hideSuggested && post.isSuggested ? "suggested" : null;
+  if (!rule) return null;
+  return {
+    platform: post.platform,
+    id: post.id,
+    verdict: "hide",
+    slopScore: 0,
+    holistic: null,
+    signals: {},
+    structural: {},
+    substance: null,
+    substanceConfidence: null,
+    interestHits: {},
+    excludedHits: {},
+    reason: rule === "promoted" ? "ad" : "suggested post",
+    aiStyle: null,
+    aiSignals: {},
+    aiStyled: false,
+    model: "",
+    inputTokens: 0,
+    evaluatedAt: Date.now(),
+    fromCache: false,
+    rule,
+  };
+}
 
 async function processPost(container: HTMLElement, article: HTMLElement): Promise<void> {
   const id = adapter.idOf(article);
@@ -260,6 +305,12 @@ async function processPost(container: HTMLElement, article: HTMLElement): Promis
 
   const ps = platformSettings();
   const post = adapter.scrape(article, id);
+
+  const byLabel = labelRule(post, ps);
+  if (byLabel) {
+    apply(container, article, byLabel);
+    return;
+  }
 
   const skip =
     post.isPromoted || // the platform already labels these; ad blocking is not our job
@@ -285,7 +336,7 @@ async function processPost(container: HTMLElement, article: HTMLElement): Promis
     apply(container, article, reply.evaluation);
   } catch (e) {
     container.setAttribute(ATTR_STATE, "error");
-    article.title = `Slop Filter: ${(e as Error).message}`;
+    article.title = `${ERROR_TITLE_PREFIX}${(e as Error).message}`;
     console.warn("[Slop Filter]", (e as Error).message);
   }
 }

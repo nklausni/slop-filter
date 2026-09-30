@@ -143,7 +143,9 @@ async function evaluate(post: PostState): Promise<Evaluation> {
   const provider = settings.provider;
   const model = settings.models[provider];
   const apiKey = await activeKey(provider);
-  if (!apiKey.trim()) throw new TypeSafeError(`No ${PROVIDER_INFO[provider].label} API key set. Open the extension options.`);
+  if (!apiKey.trim()) {
+    throw new TypeSafeError(`No ${PROVIDER_INFO[provider].label} API key saved. Paste it in the extension options and click Save.`);
+  }
 
   const text = post.text.slice(0, settings.maxPostChars);
   const trimmed: PostState = {
@@ -260,6 +262,19 @@ async function settingsReply(settings: Settings): Promise<MessageReply> {
 const FEED_URLS = chrome.runtime.getManifest().content_scripts?.flatMap((cs) => cs.matches ?? []) ?? [];
 
 /**
+ * Forget the last error once the configuration changes.
+ *
+ * On a fresh install every post fails with "no key" until one is saved, and the popup
+ * kept showing that error for the rest of the session. If the new configuration still
+ * fails, the next evaluation sets it again.
+ */
+async function clearLastError(): Promise<void> {
+  await updateStats((s) => {
+    s.lastError = null;
+  });
+}
+
+/**
  * Push the current settings to every open feed tab.
  *
  * Replaces the content script's old chrome.storage.onChanged listener, which received
@@ -298,6 +313,7 @@ async function handle(msg: Message, sender: chrome.runtime.MessageSender): Promi
       return settingsReply(await loadSettings());
     case "set-settings": {
       const reply = await settingsReply(await saveSettings(msg.patch));
+      await clearLastError();
       await broadcastSettings();
       return reply;
     }
@@ -307,6 +323,7 @@ async function handle(msg: Message, sender: chrome.runtime.MessageSender): Promi
     case "set-keys":
       if (!fromExtensionPage(sender)) throw new Error("Keys are only writable from the options page.");
       await saveKeys(msg.keys);
+      await clearLastError();
       await broadcastSettings();
       return { ok: true };
     case "clear-cache":

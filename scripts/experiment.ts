@@ -114,6 +114,7 @@ function asPost(s: Sample, platform: Platform): PostState {
     isQuote: false,
     isReply: false,
     isPromoted: false,
+    isSuggested: false,
   };
 }
 
