@@ -298,7 +298,7 @@ Nothing leaves the browser: the log is session-scoped local storage.
 ## Tests
 
 ```bash
-npm test          # 37 unit tests, ~300ms, no API key required
+npm test          # 44 unit tests, ~300ms, no API key required
 npm run typecheck
 ```
 

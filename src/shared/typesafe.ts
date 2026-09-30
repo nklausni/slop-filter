@@ -185,16 +185,43 @@ export async function openRouterKeyInfo(opts: Pick<ClientOptions, "apiKey" | "fe
   return ((await res.json()) as { data: OpenRouterKeyInfo }).data;
 }
 
+/** ~3,500 input tokens at Jev 1.13's input price, rounded up. Only used for openRouterKeyVerdict's estimate. */
+const EST_COST_PER_POST_USD = 0.00015;
+/** Fewer posts of headroom than this, and "Test key" warns instead of just confirming. */
+const LOW_LIMIT_POSTS = 1000;
+
 /**
  * Turn a valid key's info into the verdict the options page shows after "Test key".
  *
  * Reaching this function means OpenRouter accepted the key. What is left to decide is
  * whether that key can actually run the filter: Jev is a paid model, so a key without
  * credit fails on the first post with a 402 — long after the user closed the options.
+ *
+ * Only what the key itself reveals is judged. `limit` is the key's own spending cap, not
+ * the account balance; the balance endpoint (GET /credits) accepts management keys only,
+ * so an unlimited key on an empty account cannot be detected here and the message says so.
  */
 export function openRouterKeyVerdict(info: OpenRouterKeyInfo): { ok: boolean; message: string } {
-  // TODO(niko): decide what "Test key" should report for a key OpenRouter accepted.
-  // Available: info.limit, info.limit_remaining (USD, null = no limit), info.usage,
-  // info.is_free_tier. Return ok:false to show it as an error in the options page.
-  return { ok: true, message: `Key works (${info.label || "OpenRouter"}).` };
+  if (info.limit_remaining !== null && info.limit_remaining <= 0) {
+    return {
+      ok: false,
+      message: `Key is valid, but its spending limit is used up ($${usd(info.usage)} of $${usd(info.limit ?? 0)}). Raise it at openrouter.ai/settings/keys.`,
+    };
+  }
+  if (info.is_free_tier) {
+    return {
+      ok: false,
+      message: "Key is valid, but it is a free-tier key. Jev is a paid model, so every post would fail with 402. Add credits at openrouter.ai/settings/credits.",
+    };
+  }
+  if (info.limit_remaining === null) {
+    return { ok: true, message: "Key works. It has no spending limit; the account balance is not visible to this test." };
+  }
+  const posts = Math.floor(info.limit_remaining / EST_COST_PER_POST_USD);
+  const left = `$${usd(info.limit_remaining)} left on this key's limit, roughly ${posts.toLocaleString("en-US")} posts`;
+  return { ok: true, message: posts < LOW_LIMIT_POSTS ? `Key works, but only ${left}.` : `Key works: ${left}.` };
+}
+
+function usd(v: number): string {
+  return v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2);
 }
