@@ -80,6 +80,9 @@ export async function loadSettings(): Promise<Settings> {
     ...stored,
     // An unknown value must never reach the base-URL lookup.
     provider: isProvider(stored.provider) ? stored.provider : DEFAULT_SETTINGS.provider,
+    aiStyleMode: (["off", "badge", "collapse"] as const).includes(stored.aiStyleMode as never)
+      ? (stored.aiStyleMode as Settings["aiStyleMode"])
+      : DEFAULT_SETTINGS.aiStyleMode,
     models,
     interests: cleanList(stored.interests),
     excludedTopics: cleanList(stored.excludedTopics),

@@ -116,6 +116,29 @@
       </section>
 
       <section>
+        <h2>AI style</h2>
+        <p class="help">
+          A second score, separate from slop: does the post <em>read</em> as machine-written? It combines a dash count
+          done in code with four questions to Jev (contrast punchlines, "not X, but Y" figures, inflated significance,
+          templated section labels). No single Jev pattern flags a post; it takes several together. Em dashes are the
+          exception: three or more flag a post on their own, one does not. The slop score and its thresholds are
+          unaffected.
+        </p>
+        <div class="row">
+          <label for="aiStyleMode">AI-styled posts</label>
+          <select id="aiStyleMode">
+            <option value="off">Off (the style questions are not asked)</option>
+            <option value="badge">Show the score in the badge only</option>
+            <option value="collapse">Blur them, one click to show</option>
+          </select>
+        </div>
+        <p class="help">
+          The four questions add about a third to the input tokens per post. The weights are first guesses: watch the
+          badge for a while before switching to blur. AI style never hides a post outright.
+        </p>
+      </section>
+
+      <section>
         <h2>Presentation</h2>
         <div class="row">
           <label for="hideMode">Hidden posts</label>
@@ -157,9 +180,9 @@
         </p>
         <h2>What leaves your browser</h2>
         <p class="warn">
-          <strong>The text of every evaluated post is sent to the selected provider</strong> —
-          <code>openrouter.ai</code>, which forwards it to TypeSafe, or <code>api.typesafe.ai</code> directly —
-          including posts from private connections and members-only groups. Nothing else goes anywhere: no engagement counts, no
+          <strong>The text of every evaluated post is sent to the selected provider:</strong>
+          <code>openrouter.ai</code>, which forwards it to TypeSafe, or <code>api.typesafe.ai</code> directly. That
+          includes posts from private connections and members-only groups. Nothing else goes anywhere: no engagement counts, no
           author names, no browsing history, and there is no server belonging to this extension. Answers are cached in
           this browser for the session so the same post is not sent twice.
         </p>
@@ -171,7 +194,7 @@
           what they do with a request.
         </p>
         <p class="help">
-          Roughly 3,000–3,500 input tokens per post, about $0.00014 at current prices — billed to your own key.
+          Roughly 3,000–3,500 input tokens per post, about $0.00014 at current prices, billed to your own key.
           With OpenRouter the popup shows the exact cost it reports. Moving the strictness slider re-scores cached
           answers, so it costs nothing.
         </p>

@@ -158,6 +158,12 @@ export interface Evaluation {
   interestHits: Record<string, number>;
   excludedHits: Record<string, number>;
   reason: string;
+  /** AI-style score (noisy-OR of style signals and the dash feature), null when the axis is off. */
+  aiStyle: number | null;
+  /** Style signals and `dash_density`, for the badge tooltip. */
+  aiSignals: Record<string, number>;
+  /** aiStyle at or above AI_STYLE_AT. */
+  aiStyled: boolean;
   model: string;
   inputTokens: number;
   evaluatedAt: number;
@@ -165,6 +171,13 @@ export interface Evaluation {
 }
 
 export type Preset = "relaxed" | "balanced" | "strict";
+
+/**
+ * What the AI-style axis does. "off" does not ask the style questions at all; "badge"
+ * only shows the score; "collapse" also blurs AI-styled posts that the slop score let
+ * through. It never hides: style is not value.
+ */
+export type AiStyleMode = "off" | "badge" | "collapse";
 
 /** Settings that can differ between X and LinkedIn. */
 export interface PlatformSettings {
@@ -190,6 +203,7 @@ export interface Settings {
   highlightInterests: boolean;
   hideMode: "placeholder" | "remove";
   showBadges: boolean;
+  aiStyleMode: AiStyleMode;
   maxPostChars: number;
   platforms: Record<Platform, PlatformSettings>;
 }
@@ -212,6 +226,8 @@ export const DEFAULT_SETTINGS: Settings = {
   highlightInterests: true,
   hideMode: "placeholder",
   showBadges: true,
+  // Watch the scores first; the weights are not calibrated yet.
+  aiStyleMode: "badge",
   maxPostChars: 4000,
   platforms: DEFAULT_PLATFORM_SETTINGS,
 };
@@ -229,6 +245,8 @@ export interface PlatformStats {
   costUsd: number;
   /** Tokens from responses without a reported cost; the popup estimates these. */
   unpricedTokens: number;
+  /** Posts at or above AI_STYLE_AT, whatever the mode did with them. */
+  aiStyled: number;
 }
 
 export const EMPTY_PLATFORM_STATS: PlatformStats = {
@@ -242,6 +260,7 @@ export const EMPTY_PLATFORM_STATS: PlatformStats = {
   inputTokens: 0,
   costUsd: 0,
   unpricedTokens: 0,
+  aiStyled: 0,
 };
 
 export interface SessionStats {
@@ -290,13 +309,15 @@ export interface LogEntry {
   d: string;
   /** true when the answers came from cache rather than the API */
   c: boolean;
+  /** AI-style score, null when the axis is off or for a skip */
+  a?: number | null;
 }
 
 export const LOG_MAX = 5000;
 
 export type Message =
   | { kind: "evaluate"; post: PostState }
-  | { kind: "outcome"; platform: Platform; verdict: Verdict; excluded: boolean }
+  | { kind: "outcome"; platform: Platform; verdict: Verdict; excluded: boolean; aiStyled: boolean }
   | { kind: "skipped"; platform: Platform }
   | { kind: "get-stats" }
   | { kind: "reset-stats" }

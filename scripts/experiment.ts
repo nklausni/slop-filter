@@ -7,6 +7,7 @@
 //   npm run experiment -- --preset strict       # one preset
 //   npm run experiment -- --id short_joke       # one post, full answer dump
 //   npm run experiment -- --misses              # only rows that disagree with `expect`
+//   npm run experiment -- --ai-style            # also ask the AI-style questions, add an AI column
 //
 // Needs TYPESAFE_API_KEY, or OPENROUTER_API_KEY with `--provider openrouter` (both loaded
 // from .env by the npm script). Raw responses are cached in
@@ -20,13 +21,14 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
+  AI_STYLE_AT,
   STRUCTURAL_WEIGHTS,
   buildQuestions,
   buildState,
   policyFor,
   signalsFor,
 } from "../src/shared/questions/index.ts";
-import { compositeSlop, decide, extractAnswers } from "../src/shared/scoring.ts";
+import { aiStyleScore, compositeSlop, decide, extractAnswers } from "../src/shared/scoring.ts";
 import { systemOne } from "../src/shared/typesafe.ts";
 import {
   PLATFORMS,
@@ -63,6 +65,7 @@ const onlyPlatform = argOf("--platform") as Platform | undefined;
 const onlyPreset = argOf("--preset") as Preset | undefined;
 const onlyId = argOf("--id");
 const onlyMisses = args.includes("--misses");
+const withAiStyle = args.includes("--ai-style");
 const providerArg = argOf("--provider") ?? process.env.SLOP_PROVIDER ?? "typesafe";
 if (!isProvider(providerArg)) {
   console.error(`Unknown provider "${providerArg}". Use typesafe or openrouter.`);
@@ -116,7 +119,7 @@ function asPost(s: Sample, platform: Platform): PostState {
 
 async function ask(post: PostState): Promise<{ response: SystemOneResponse; cached: boolean; ms: number }> {
   const state = buildState(post, config.interests, config.excludedTopics);
-  const questions = buildQuestions(post.platform, config.interests, config.excludedTopics);
+  const questions = buildQuestions(post.platform, config.interests, config.excludedTopics, withAiStyle);
   const k = key(state, questions);
   if (cache[k]) return { response: cache[k], cached: true, ms: 0 };
   const t0 = performance.now();
@@ -150,11 +153,20 @@ for (const platform of onlyPlatform ? [onlyPlatform] : PLATFORMS) {
       pad("str", 5) +
       pad("P(slop)", 8) +
       pad("slop", 6) +
+      (withAiStyle ? pad("AI", 6) : "") +
       presets.map((p) => pad(p, 11)).join("") +
       "expect",
   );
 
-  const rows: { id: string; expect: Verdict; verdicts: Record<Preset, Verdict>; slop: number; holistic: number | null; separation?: boolean }[] = [];
+  const rows: {
+    id: string;
+    expect: Verdict;
+    verdicts: Record<Preset, Verdict>;
+    slop: number;
+    holistic: number | null;
+    ai: number | null;
+    separation?: boolean;
+  }[] = [];
 
   for (const s of chosen) {
     const post = asPost(s, platform);
@@ -174,7 +186,8 @@ for (const platform of onlyPlatform ? [onlyPlatform] : PLATFORMS) {
     const { score: slop, structural } = compositeSlop(raw, s.text, platform);
     const verdicts = {} as Record<Preset, Verdict>;
     for (const p of presets) verdicts[p] = decide(raw, s.text, platform, p, true).verdict;
-    rows.push({ id: s.id, expect: s.expect, verdicts, slop, holistic: raw.holistic, separation: s.separation });
+    const ai = aiStyleScore(raw, s.text);
+    rows.push({ id: s.id, expect: s.expect, verdicts, slop, holistic: raw.holistic, ai: ai.score, separation: s.separation });
 
     const structSummary = structIds.filter((k) => (structural[k] ?? 0) > 0).map((k) => k[0]).join("");
     const missed = presets.some((p) => verdicts[p] !== s.expect);
@@ -186,6 +199,7 @@ for (const platform of onlyPlatform ? [onlyPlatform] : PLATFORMS) {
           pad(structSummary || "–", 5) +
           pad(num(raw.holistic), 8) +
           pad(slop.toFixed(2), 6) +
+          (withAiStyle ? pad(num(ai.score), 6) : "") +
           presets.map((p) => pad(mark(verdicts[p], s.expect), 11)).join("") +
           s.expect +
           (cached ? "  (cached)" : `  ${ms.toFixed(0)}ms ${response.usage?.input_tokens ?? "?"}tok`),
@@ -198,6 +212,7 @@ for (const platform of onlyPlatform ? [onlyPlatform] : PLATFORMS) {
       console.log("\nstructural:", structural);
       console.log("interests:", raw.interestHits);
       console.log("excluded:", raw.excludedHits);
+      if (withAiStyle) console.log("AI style:", ai.score?.toFixed(2) ?? "–", ai.signals);
       for (const p of presets) console.log(`${p}: ${JSON.stringify(decide(raw, s.text, platform, p, true))}`);
       console.log("\nraw answers:", JSON.stringify(response.answers, null, 1));
     }
@@ -222,6 +237,18 @@ for (const platform of onlyPlatform ? [onlyPlatform] : PLATFORMS) {
         `missed-slop ${missedSlop.length}${missedSlop.length ? ` (${missedSlop.map((r) => r.id).join(", ")})` : ""}`,
     );
     console.log(`${pad("", 10)} hide≥${pol.hideAt} collapse≥${pol.collapseAt} hard≥${pol.hardSignalAt}`);
+  }
+
+  if (withAiStyle) {
+    // Style is not value, so this is a distribution per label, not a pass/fail. Nothing in
+    // samples/ is labelled for style yet; read which posts land above the line.
+    const flagged = rows.filter((r) => r.ai !== null && r.ai >= AI_STYLE_AT);
+    const bad = (r: (typeof rows)[number]) => r.expect === "hide" || r.expect === "collapse";
+    console.log(
+      `AI style ≥ ${AI_STYLE_AT}: ${flagged.filter(bad).length}/${rows.filter(bad).length} slop, ` +
+        `${flagged.filter((r) => !bad(r)).length}/${rows.filter((r) => !bad(r)).length} good` +
+        (flagged.length ? `  (${flagged.map((r) => `${r.id} ${r.ai!.toFixed(2)}`).join(", ")})` : ""),
+    );
   }
 
   const sep = rows.filter((r) => r.separation !== false);

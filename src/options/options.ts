@@ -77,6 +77,7 @@ async function load(): Promise<void> {
   $<HTMLTextAreaElement>("allowHandles").value = settings.allowHandles.map((h) => `@${h}`).join("\n");
   $<HTMLSelectElement>("hideMode").value = settings.hideMode;
   $<HTMLInputElement>("showBadges").checked = settings.showBadges;
+  $<HTMLSelectElement>("aiStyleMode").value = settings.aiStyleMode;
   $<HTMLInputElement>("maxPostChars").value = String(settings.maxPostChars);
 
   for (const p of PLATFORMS) {
@@ -113,6 +114,7 @@ async function save(): Promise<void> {
     allowHandles: linesOf($<HTMLTextAreaElement>("allowHandles").value).map((h) => h.replace(/^@/, "").toLowerCase()),
     hideMode: $<HTMLSelectElement>("hideMode").value as Settings["hideMode"],
     showBadges: $<HTMLInputElement>("showBadges").checked,
+    aiStyleMode: $<HTMLSelectElement>("aiStyleMode").value as Settings["aiStyleMode"],
     maxPostChars: Math.max(500, Math.min(12000, Number($<HTMLInputElement>("maxPostChars").value) || 4000)),
     platforms,
   };

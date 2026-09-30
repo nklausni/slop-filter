@@ -2,18 +2,22 @@
 // code runs in the service worker and in scripts/experiment.ts.
 
 import {
+  AI_STYLE_AT,
+  AI_STYLE_SIGNALS,
   BLEND,
+  DASH_WEIGHT,
   EMPTY_MEDIA_DAMPING,
   HARD_SIGNAL_HOLISTIC_FLOOR,
   STRUCTURAL_WEIGHTS,
   VERDICT_BLEND,
+  dashSignal,
   policyFor,
   signalsFor,
   structuralSignals,
   substanceFor,
   type Policy,
 } from "./questions/index.ts";
-import type { Answer, Evaluation, Platform, PostState, Preset, SystemOneResponse, Verdict } from "./types.ts";
+import type { AiStyleMode, Answer, Evaluation, Platform, PostState, Preset, SystemOneResponse, Verdict } from "./types.ts";
 
 export interface RawAnswers {
   signals: Record<string, number>;
@@ -24,6 +28,8 @@ export interface RawAnswers {
   substanceConfidence: number | null;
   interestHits: Record<string, number>;
   excludedHits: Record<string, number>;
+  /** AI-style Nouls; empty when the style questions were not asked. */
+  aiSignals: Record<string, number>;
 }
 
 /** Pull the numbers out of a response. Unknown/missing answers are skipped, not invented. */
@@ -67,7 +73,33 @@ export function extractAnswers(
     if (ans && ans.type === "noul") excludedHits[topic] = clamp01(ans.noul);
   });
 
-  return { signals, holistic, holisticConfidence, substance, substanceConfidence, interestHits, excludedHits };
+  const aiSignals: Record<string, number> = {};
+  for (const id of Object.keys(AI_STYLE_SIGNALS)) {
+    const ans = a[id];
+    if (ans && ans.type === "noul") aiSignals[id] = clamp01(ans.noul);
+  }
+
+  return { signals, holistic, holisticConfidence, substance, substanceConfidence, interestHits, excludedHits, aiSignals };
+}
+
+/**
+ * AI-style score in 0..1, or null when no style answer came back.
+ *
+ * Noisy-OR: 1 - Π(1 - weight·p). Unlike the slop battery's "worst signal", this rewards
+ * co-occurrence, because one stylistic habit is how some people write and several at
+ * once are a template. The dash feature joins the same product.
+ */
+export function aiStyleScore(raw: RawAnswers, text: string): { score: number | null; signals: Record<string, number> } {
+  const signals: Record<string, number> = { ...raw.aiSignals };
+  if (!Object.keys(signals).length) return { score: null, signals };
+  signals.dash_density = clamp01(dashSignal(text));
+
+  let clean = 1 - DASH_WEIGHT * signals.dash_density;
+  for (const [id, { weight }] of Object.entries(AI_STYLE_SIGNALS)) {
+    const v = signals[id];
+    if (v !== undefined) clean *= 1 - weight * v;
+  }
+  return { score: clamp01(1 - clean), signals };
 }
 
 export interface Flags {
@@ -140,6 +172,8 @@ export interface Decision {
   verdict: Verdict;
   slopScore: number;
   structural: Record<string, number>;
+  aiStyle: number | null;
+  aiSignals: Record<string, number>;
   reason: string;
 }
 
@@ -149,10 +183,12 @@ export interface Decision {
  *   2. hard single signal      -> hide   (the "any serious violation" rule)
  *   3. composite >= hideAt     -> hide
  *   4. composite >= collapseAt -> collapse (uncertain band; one click to recover)
- *   5. interest hit            -> highlight
- *   6. otherwise               -> show
+ *   5. AI style >= AI_STYLE_AT -> collapse, only in "collapse" mode
+ *   6. interest hit            -> highlight
+ *   7. otherwise               -> show
  *
  * Interests never rescue a hidden post: "I care about AI" must not surface AI slop.
+ * The same holds for AI style, and AI style never hides: it is not a judgment of value.
  */
 export function decide(
   raw: RawAnswers,
@@ -161,10 +197,12 @@ export function decide(
   preset: Preset,
   highlightInterests: boolean,
   flags: Flags = {},
+  aiStyleMode: AiStyleMode = "off",
 ): Decision {
   const policy: Policy = policyFor(platform, preset);
   const { score: slopScore, structural } = compositeSlop(raw, text, platform, flags);
-  const base = { slopScore, structural };
+  const ai = aiStyleMode === "off" ? { score: null, signals: {} } : aiStyleScore(raw, text);
+  const base = { slopScore, structural, aiStyle: ai.score, aiSignals: ai.signals };
 
   const excluded = topEntry(raw.excludedHits);
   if (excluded && excluded[1] >= policy.excludeAt) {
@@ -212,6 +250,14 @@ export function decide(
     };
   }
 
+  if (aiStyleMode === "collapse" && ai.score !== null && ai.score >= AI_STYLE_AT) {
+    return {
+      ...base,
+      verdict: "collapse",
+      reason: `AI style ${ai.score.toFixed(2)} ≥ ${AI_STYLE_AT}; top: ${topOf(ai.signals, 3)}`,
+    };
+  }
+
   if (highlightInterests) {
     const interest = topEntry(raw.interestHits);
     if (interest && interest[1] >= policy.interestAt) {
@@ -229,12 +275,18 @@ export function buildEvaluation(
   preset: Preset,
   highlightInterests: boolean,
   fromCache: boolean,
+  aiStyleMode: AiStyleMode = "off",
 ): Evaluation {
   const raw = extractAnswers(response, post.platform, interests, excludedTopics);
-  const d = decide(raw, post.text, post.platform, preset, highlightInterests, {
-    hasMedia: post.hasMedia,
-    hasLink: post.hasLink,
-  });
+  const d = decide(
+    raw,
+    post.text,
+    post.platform,
+    preset,
+    highlightInterests,
+    { hasMedia: post.hasMedia, hasLink: post.hasLink },
+    aiStyleMode,
+  );
   return {
     platform: post.platform,
     id: post.id,
@@ -248,6 +300,9 @@ export function buildEvaluation(
     interestHits: raw.interestHits,
     excludedHits: raw.excludedHits,
     reason: d.reason,
+    aiStyle: d.aiStyle,
+    aiSignals: d.aiSignals,
+    aiStyled: d.aiStyle !== null && d.aiStyle >= AI_STYLE_AT,
     model: response.model,
     inputTokens: response.usage?.input_tokens ?? 0,
     evaluatedAt: Date.now(),
@@ -258,6 +313,14 @@ export function buildEvaluation(
 /** Top contributors by raw value, including the code-side structural features. */
 function topSignals(raw: RawAnswers, n: number, structural: Record<string, number> = {}): string {
   return [...Object.entries(raw.signals), ...Object.entries(structural)]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([k, v]) => `${k}=${v.toFixed(2)}`)
+    .join(" ");
+}
+
+function topOf(m: Record<string, number>, n: number): string {
+  return Object.entries(m)
     .sort((a, b) => b[1] - a[1])
     .slice(0, n)
     .map(([k, v]) => `${k}=${v.toFixed(2)}`)

@@ -147,7 +147,8 @@ function apply(container: HTMLElement, article: HTMLElement, ev: Evaluation): vo
       platform: ev.platform,
       verdict: ev.verdict as Verdict,
       excluded: ev.reason.startsWith("excluded topic"),
-    })
+      aiStyled: ev.aiStyled === true,
+    } satisfies Message)
       .then((r) => mirrorStats(r.stats))
       .catch(() => {});
   }
@@ -155,8 +156,13 @@ function apply(container: HTMLElement, article: HTMLElement, ev: Evaluation): vo
 
 function makeBadge(ev: Evaluation): HTMLElement {
   const b = document.createElement("div");
-  b.className = `${CLS.badge} slopf-badge--${ev.verdict}`;
-  b.textContent = `slop ${Math.round(ev.slopScore * 100)}%`;
+  b.className = `${CLS.badge} slopf-badge--${ev.verdict}${ev.aiStyled ? " slopf-badge--ai" : ""}`;
+  // `aiStyle` is absent on evaluations cached before the AI-style axis existed.
+  const ai = typeof ev.aiStyle === "number" ? ev.aiStyle : null;
+  b.textContent = `slop ${Math.round(ev.slopScore * 100)}%` + (ai !== null ? ` · AI ${Math.round(ai * 100)}%` : "");
+  const aiLines = Object.entries(ev.aiSignals ?? {})
+    .sort((a, b2) => b2[1] - a[1])
+    .map(([k, v]) => `${k}: ${v.toFixed(2)}`);
   const structural = Object.entries(ev.structural)
     .filter(([, v]) => v > 0)
     .map(([k, v]) => `${k}: ${v.toFixed(2)}`);
@@ -170,6 +176,7 @@ function makeBadge(ev: Evaluation): HTMLElement {
       .map(([k, v]) => `${k}: ${v.toFixed(2)}`),
     ev.substance !== null ? `substance: ${ev.substance.toFixed(2)}` : "",
     ...(structural.length ? ["", "structural (code-side):", ...structural] : []),
+    ...(ai !== null ? ["", `AI style: ${ai.toFixed(2)}`, ...aiLines] : []),
     ev.fromCache ? "\n(cached)" : "",
   ]
     .filter((l) => l !== "")
@@ -344,7 +351,7 @@ async function init(): Promise<void> {
     // just appeared (or a provider switch) retries posts that failed without one.
     const changed =
       hasKey !== prevHasKey ||
-      (["enabled", "highlightInterests", "interests", "excludedTopics", "hideMode", "showBadges", "provider", "models", "maxPostChars", "allowHandles"] as const).some(
+      (["enabled", "highlightInterests", "interests", "excludedTopics", "hideMode", "showBadges", "aiStyleMode", "provider", "models", "maxPostChars", "allowHandles"] as const).some(
         (k) => JSON.stringify(prev[k]) !== JSON.stringify(settings[k]),
       ) || JSON.stringify(prev.platforms?.[platform]) !== JSON.stringify(settings.platforms?.[platform]);
     if (changed) {

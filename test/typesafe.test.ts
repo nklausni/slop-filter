@@ -3,7 +3,7 @@
 //   npm test
 //
 // "Test key" is the only moment the user is looking at the options page. A key that is
-// valid but cannot pay fails later, on the first post, where nobody sees it — so these
+// valid but cannot pay fails later, on the first post, where nobody sees it. So these
 // cases pin down which states are reported as errors and which only as a warning.
 
 import assert from "node:assert/strict";

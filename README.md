@@ -21,8 +21,8 @@ your code (this repo) decides what to do with the probabilities.
 
 ## Privacy
 
-**The text of every evaluated post is sent to the provider you pick** — `openrouter.ai`,
-which forwards it to TypeSafe, or `api.typesafe.ai` directly — including posts from
+**The text of every evaluated post is sent to the provider you pick:** `openrouter.ai`,
+which forwards it to TypeSafe, or `api.typesafe.ai` directly. That includes posts from
 private connections and members-only groups. There is no server belonging to this project;
 your API keys and settings live in `chrome.storage.local` on your own profile.
 
@@ -135,6 +135,35 @@ Inside the battery the dominant term is the **worst single signal**, not a mean 
 post usually trips one pattern hard, and averaging buries it. Counting-based tells
 (thread numbering, emoji bullets, staccato lines, hashtag spam) are computed in code,
 because the model counts badly and a regex counts exactly.
+
+## AI style (separate from slop)
+
+The slop score asks whether a post is worth reading and deliberately ignores who wrote it.
+A second, independent score asks whether it **reads as machine-written**. Measured on the
+sample sets, em dashes appear in 4 of 10 good LinkedIn posts and in none of the 11 slop
+ones, so a dash count folded into the slop score would push the wrong posts toward hiding.
+Style therefore has its own score, its own badge and its own setting.
+
+Inputs: a dash feature counted in code (`dashSignal` in `src/shared/questions/aistyle.ts`)
+and four Nouls asked in the same request: `contrast_punchline`, `negative_parallelism`,
+`inflated_significance`, `section_scaffold`. They combine by noisy-OR,
+`1 - Π(1 - weight·p)`, so co-occurrence counts. Every Jev signal's weight is below the
+threshold (`AI_STYLE_AT = 0.6`): one habit is how some people write, several at once are a
+template.
+
+The dash feature counts only the em dash (U+2014) used as a separator: not ranges between
+digits, not the label separator of a marked list, not the spaced en dash that is ordinary
+German typography, not a typed hyphen. It is the one signal that may flag a post alone:
+one em dash scores 0.23, two 0.47, three or more 0.70. In the samples, the four good
+LinkedIn posts with a dash have exactly one each.
+
+Options → **AI style**: *Off* (the questions are not asked), *Badge* (default; shows
+`AI nn%` next to the slop score) or *Blur* (collapses AI-styled posts the slop score let
+through). It never hides, never changes a slop verdict, and interests do not rescue a post
+it blurred. The four questions add about a third to the input tokens per post.
+
+The weights are first guesses; nothing in `samples/` is labelled for style yet. Calibrate
+with `npm run experiment -- --ai-style`, which adds an AI column and a per-label count.
 
 ## Tune it
 
@@ -263,6 +292,7 @@ src/shared/questions/core.ts        shared signals, holistic Choice, structural 
 src/shared/questions/x.ts           X signals, substance scale, thresholds   ← review these
 src/shared/questions/linkedin.ts    LinkedIn ditto
 src/shared/questions/policy.ts      the Policy shape
+src/shared/questions/aistyle.ts     AI-style questions, dash feature, noisy-OR weights
 src/shared/scoring.ts               answers → verdict (pure; no I/O, no chrome.*)
 src/shared/typesafe.ts              fetch client for POST /v1/systemone (TypeSafe or OpenRouter)
 src/shared/storage.ts               settings + separately stored API keys, legacy migration
@@ -298,7 +328,7 @@ Nothing leaves the browser: the log is session-scoped local storage.
 ## Tests
 
 ```bash
-npm test          # 44 unit tests, ~300ms, no API key required
+npm test          # 65 unit tests, ~300ms, no API key required
 npm run typecheck
 ```
 

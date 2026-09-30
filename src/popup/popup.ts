@@ -3,7 +3,7 @@ import type { Evaluation, LogEntry, Platform, Preset, SessionStats, Settings } f
 import { PLATFORM_LABEL, PROVIDER_INFO, totalStats } from "../shared/types.ts";
 
 const PRESETS: Preset[] = ["relaxed", "balanced", "strict"];
-// jev-1.13 input price; output is free. Only used for responses that report no cost —
+// jev-1.13 input price; output is free. Only used for responses that report no cost:
 // OpenRouter returns the exact `usage.cost`, TypeSafe does not.
 const PRICE_PER_MTOK = 0.042;
 
@@ -88,6 +88,7 @@ function renderStats(st: SessionStats): void {
     $(`${prefix}Skip`).textContent = String(s.skipped);
     $(`${prefix}Cache`).textContent = String(s.cacheHits);
     $(`${prefix}Tok`).textContent = s.inputTokens.toLocaleString();
+    $(`${prefix}Ai`).textContent = String(s.aiStyled);
   }
 
   const cost = t.costUsd + (t.unpricedTokens / 1e6) * PRICE_PER_MTOK;

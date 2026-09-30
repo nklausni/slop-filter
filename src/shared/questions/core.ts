@@ -297,7 +297,7 @@ const POSITION_MARKER = /\(?\d{1,2}\s*\/\s*(\d{1,2}|n)\)?/;
  * ✅ / 🔥 / 👉 headers is the engagement-post shape. Measured: the earlier version scored
  * emoji_bullets 1.00 on "1. Install it / 2. Configure the key / 3. Run the tests".
  */
-const LEADING_EMOJI =
+export const LEADING_EMOJI =
   /^\s*(?:[\u{1F300}-\u{1FAFF}\u{2190}-\u{21FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2022}\u{25AA}\u{25CF}\u{27A4}])\s*/u;
 
 /**
@@ -343,7 +343,7 @@ export function structuralSignals(text: string, platform: Platform): Record<stri
 }
 
 /** 0 at or below `lo`, 1 at or above `hi`, linear between. */
-function ramp(v: number, lo: number, hi: number): number {
+export function ramp(v: number, lo: number, hi: number): number {
   if (hi <= lo) return v > lo ? 1 : 0;
   return Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
 }

@@ -13,10 +13,12 @@ import {
   interestQuestions,
   type SignalSet,
 } from "./core.ts";
+import { AI_STYLE_SIGNALS } from "./aistyle.ts";
 import { LINKEDIN_POLICIES, LINKEDIN_SIGNALS, LINKEDIN_SUBSTANCE } from "./linkedin.ts";
 import type { Policy } from "./policy.ts";
 import { X_POLICIES, X_SIGNALS, X_SUBSTANCE } from "./x.ts";
 
+export * from "./aistyle.ts";
 export * from "./core.ts";
 export type { Policy } from "./policy.ts";
 
@@ -90,14 +92,22 @@ export function buildState(post: PostState, _interests: string[], _excludedTopic
   return state;
 }
 
-/** The full per-post request. */
+/**
+ * The full per-post request.
+ *
+ * `aiStyle` adds the four style questions (~1,100 input tokens, about a third more per
+ * post). They are only asked when the axis is on, so "off" costs nothing. Switching
+ * between "badge" and "collapse" does not change the request and re-scores from cache.
+ */
 export function buildQuestions(
   platform: Platform,
   interests: string[],
   excludedTopics: string[],
+  aiStyle = false,
 ): Questions {
   const questions: Questions = {};
   for (const [id, signal] of Object.entries(signalsFor(platform))) questions[id] = signal.question;
+  if (aiStyle) for (const [id, signal] of Object.entries(AI_STYLE_SIGNALS)) questions[id] = signal.question;
   questions.substance = substanceFor(platform);
   questions.verdict = VERDICT_CHOICE;
   Object.assign(questions, interestQuestions(interests));

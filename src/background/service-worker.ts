@@ -153,7 +153,7 @@ async function evaluate(post: PostState): Promise<Evaluation> {
   };
   // Build the request first so the cache key can be derived from it.
   const state = buildState(trimmed, settings.interests, settings.excludedTopics);
-  const questions = buildQuestions(post.platform, settings.interests, settings.excludedTopics);
+  const questions = buildQuestions(post.platform, settings.interests, settings.excludedTopics, settings.aiStyleMode !== "off");
   const key = cacheKey(post, { state, model, questions });
   const cached = await cacheGet(key);
 
@@ -180,6 +180,7 @@ async function evaluate(post: PostState): Promise<Evaluation> {
     settings.platforms[post.platform].preset,
     settings.highlightInterests,
     fromCache,
+    settings.aiStyleMode,
   );
 
   await updateStats((s) => {
@@ -204,14 +205,21 @@ async function evaluate(post: PostState): Promise<Evaluation> {
     h: evaluation.holistic === null ? null : Number(evaluation.holistic.toFixed(3)),
     d: topDriver(evaluation),
     c: fromCache,
+    a: evaluation.aiStyle === null ? null : Number(evaluation.aiStyle.toFixed(3)),
   });
   return evaluation;
 }
 
 /** The content script reports what it actually did, so stats match the DOM. */
-async function recordOutcome(platform: Platform, verdict: Evaluation["verdict"], excluded: boolean): Promise<void> {
+async function recordOutcome(
+  platform: Platform,
+  verdict: Evaluation["verdict"],
+  excluded: boolean,
+  aiStyled: boolean,
+): Promise<void> {
   await updateStats((s) => {
     const ps = s.byPlatform[platform];
+    if (aiStyled) ps.aiStyled++;
     if (verdict === "hide") ps.hidden++;
     if (verdict === "collapse") ps.collapsed++;
     if (verdict === "highlight") ps.highlighted++;
@@ -236,8 +244,8 @@ chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
 /**
  * True for the extension's own pages (options, popup), false for content scripts.
  *
- * `sender.tab` cannot tell them apart — the options page opens in a tab — but a content
- * script's `sender.url` is the feed's URL, never a chrome-extension:// one.
+ * `sender.tab` cannot tell them apart, because the options page opens in a tab. A content
+ * script's `sender.url` is the feed's URL, though, never a chrome-extension:// one.
  */
 function fromExtensionPage(sender: chrome.runtime.MessageSender): boolean {
   return sender.id === chrome.runtime.id && (sender.url ?? "").startsWith(chrome.runtime.getURL(""));
@@ -255,7 +263,7 @@ const FEED_URLS = chrome.runtime.getManifest().content_scripts?.flatMap((cs) => 
  * Push the current settings to every open feed tab.
  *
  * Replaces the content script's old chrome.storage.onChanged listener, which received
- * every changed value in the area — the API key included — whenever it was saved.
+ * every changed value in the area, the API key included, whenever it was saved.
  */
 async function broadcastSettings(): Promise<void> {
   const settings = await loadSettings();
@@ -270,7 +278,7 @@ async function handle(msg: Message, sender: chrome.runtime.MessageSender): Promi
     case "evaluate":
       return { ok: true, evaluation: await evaluate(msg.post) };
     case "outcome":
-      await recordOutcome(msg.platform, msg.verdict, msg.excluded);
+      await recordOutcome(msg.platform, msg.verdict, msg.excluded, msg.aiStyled === true);
       // Returning stats lets the content script mirror them onto the page, where they can
       // be read without an extension context.
       return { ok: true, stats: await getStats() };

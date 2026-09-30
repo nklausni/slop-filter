@@ -144,7 +144,7 @@ function describeStatus(status: number, body: unknown, label: string): string {
   }
 }
 
-/** TypeSafe's GET /v1/models — used by the options page "Test key" button. */
+/** TypeSafe's GET /v1/models, used by the options page "Test key" button. */
 export async function listModels(opts: Pick<ClientOptions, "apiKey" | "fetchImpl">) {
   const { label, baseUrl } = PROVIDER_INFO.typesafe;
   const res = await (opts.fetchImpl ?? fetch)(`${baseUrl}/v1/models`, { headers: { Authorization: `Bearer ${opts.apiKey.trim()}` } });
@@ -164,7 +164,7 @@ export interface OpenRouterKeyInfo {
 }
 
 /**
- * OpenRouter's GET /api/v1/key — used by the "Test key" button.
+ * OpenRouter's GET /api/v1/key, used by the "Test key" button.
  *
  * OpenRouter's /v1/models has a different shape from TypeSafe's (the TypeSafe SDK rejects
  * it), and a model list proves little anyway: the key endpoint says whether the key is
@@ -195,7 +195,7 @@ const LOW_LIMIT_POSTS = 1000;
  *
  * Reaching this function means OpenRouter accepted the key. What is left to decide is
  * whether that key can actually run the filter: Jev is a paid model, so a key without
- * credit fails on the first post with a 402 — long after the user closed the options.
+ * credit fails on the first post with a 402, long after the user closed the options.
  *
  * Only what the key itself reveals is judged. `limit` is the key's own spending cap, not
  * the account balance; the balance endpoint (GET /credits) accepts management keys only,
