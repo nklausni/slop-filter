@@ -1,9 +1,11 @@
 import { detectPlatform } from "../platforms/index.ts";
 import type { Evaluation, LogEntry, Platform, Preset, SessionStats, Settings } from "../shared/types.ts";
-import { PLATFORM_LABEL, totalStats } from "../shared/types.ts";
+import { PLATFORM_LABEL, PROVIDER_INFO, totalStats } from "../shared/types.ts";
 
 const PRESETS: Preset[] = ["relaxed", "balanced", "strict"];
-const PRICE_PER_MTOK = 0.042; // jev-1.13 input price; output is free
+// jev-1.13 input price; output is free. Only used for responses that report no cost —
+// OpenRouter returns the exact `usage.cost`, TypeSafe does not.
+const PRICE_PER_MTOK = 0.042;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -39,7 +41,7 @@ async function detectCurrentTab(): Promise<void> {
   }
 }
 
-function renderSettings(s: Settings): void {
+function renderSettings(s: Settings, hasKey: boolean): void {
   $<HTMLInputElement>("enabled").checked = s.enabled;
   $<HTMLInputElement>("highlightInterests").checked = s.highlightInterests;
 
@@ -55,9 +57,10 @@ function renderSettings(s: Settings): void {
   }
 
   const warn = $("warning");
-  if (!s.apiKey.trim()) {
+  if (!hasKey) {
     warn.hidden = false;
-    warn.innerHTML = `No TypeSafe API key yet. <a href="#" id="warnOptions">Add it in settings</a>.`;
+    // Labels come from the fixed PROVIDER_INFO table, never from storage.
+    warn.innerHTML = `No ${PROVIDER_INFO[s.provider].label} API key yet. <a href="#" id="warnOptions">Add it in settings</a>.`;
     warn.querySelector("#warnOptions")?.addEventListener("click", openOptions);
   } else if (s.highlightInterests && s.interests.length === 0) {
     warn.hidden = false;
@@ -87,7 +90,9 @@ function renderStats(st: SessionStats): void {
     $(`${prefix}Tok`).textContent = s.inputTokens.toLocaleString();
   }
 
-  $("dCost").textContent = `$${((t.inputTokens / 1e6) * PRICE_PER_MTOK).toFixed(4)}`;
+  const cost = t.costUsd + (t.unpricedTokens / 1e6) * PRICE_PER_MTOK;
+  $("dCost").textContent = `$${cost.toFixed(4)}`;
+  $("dCost").title = t.unpricedTokens ? "Partly estimated from token counts" : "As reported by the provider";
   $("dModel").textContent = st.lastModel ?? "–";
   $("dErrors").textContent = String(st.errors);
   const le = $("lastError");
@@ -117,15 +122,15 @@ function renderRecent(list: Evaluation[]): void {
 }
 
 async function refresh(): Promise<void> {
-  const [{ settings }, { stats }, { recent }, { log }] = await Promise.all([
-    send<{ settings: Settings }>({ kind: "get-settings" }),
+  const [{ settings, hasKey }, { stats }, { recent }, { log }] = await Promise.all([
+    send<{ settings: Settings; hasKey: boolean }>({ kind: "get-settings" }),
     send<{ stats: SessionStats }>({ kind: "get-stats" }),
     send<{ recent: Evaluation[] }>({ kind: "get-recent" }),
     send<{ log: LogEntry[] }>({ kind: "get-log" }),
   ]);
   cachedLog = log;
   cachedStats = stats;
-  renderSettings(settings);
+  renderSettings(settings, hasKey);
   renderStats(stats);
   renderRecent(recent);
   $<HTMLButtonElement>("copyLog").textContent = `Copy log (${log.length})`;
@@ -137,8 +142,8 @@ function openOptions(e?: Event): void {
 }
 
 async function patch(p: Partial<Settings>): Promise<void> {
-  const { settings } = await send<{ settings: Settings }>({ kind: "set-settings", patch: p });
-  renderSettings(settings);
+  const { settings, hasKey } = await send<{ settings: Settings; hasKey: boolean }>({ kind: "set-settings", patch: p });
+  renderSettings(settings, hasKey);
 }
 
 /** Patch only the active tab's platform, leaving the other untouched. */

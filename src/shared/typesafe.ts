@@ -2,15 +2,17 @@
 // Mirrors the SDK's default RetryPolicy (2 retries, 500ms initial, 5s max, honors Retry-After).
 // A plain fetch is used instead of @typesafe-ai/sdk so nothing needs bundling into a
 // service worker and there is no Node env-var lookup.
+//
+// Two hosts speak this protocol: TypeSafe itself and OpenRouter's System One API, which
+// takes the same request body and returns the same answers. The host is looked up from
+// PROVIDER_INFO and cannot be passed in, so no setting can send the key elsewhere.
 
-import type { EntryType, Questions, SystemOneRequest, SystemOneResponse } from "./types.ts";
-
-export const DEFAULT_BASE_URL = "https://api.typesafe.ai";
+import { PROVIDER_INFO, type EntryType, type Provider, type Questions, type SystemOneRequest, type SystemOneResponse } from "./types.ts";
 
 export interface ClientOptions {
+  provider: Provider;
   apiKey: string;
   model: string;
-  baseUrl?: string;
   timeoutMs?: number;
   maxRetries?: number;
   fetchImpl?: typeof fetch;
@@ -48,11 +50,12 @@ export async function systemOne(
   state: EntryType,
   questions: Questions,
 ): Promise<SystemOneResponse> {
+  const { label, baseUrl } = PROVIDER_INFO[opts.provider];
   const apiKey = opts.apiKey.trim();
-  if (!apiKey) throw new TypeSafeError("Missing TypeSafe API key. Add it in the extension options.");
+  if (!apiKey) throw new TypeSafeError(`Missing ${label} API key. Add it in the extension options.`);
   if (!Object.keys(questions).length) throw new TypeSafeError("No questions to ask.");
 
-  const url = `${(opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "")}/v1/systemone`;
+  const url = `${baseUrl}/v1/systemone`;
   const body: SystemOneRequest = { state, model: opts.model, questions };
   const payload = JSON.stringify(body);
   const timeoutMs = opts.timeoutMs ?? 15_000;
@@ -73,7 +76,8 @@ export async function systemOne(
         body: payload,
         signal: controller.signal,
       });
-      const requestId = res.headers.get("x-typesafe-request-id") ?? undefined;
+      const requestId =
+        res.headers.get("x-typesafe-request-id") ?? res.headers.get("x-generation-id") ?? res.headers.get("request-id") ?? undefined;
       if (res.ok) {
         return (await res.json()) as SystemOneResponse;
       }
@@ -83,7 +87,7 @@ export async function systemOne(
       } catch {
         errBody = await res.text().catch(() => undefined);
       }
-      const err = new TypeSafeError(describeStatus(res.status, errBody), res.status, requestId, errBody);
+      const err = new TypeSafeError(describeStatus(res.status, errBody, label), res.status, requestId, errBody);
       if (!RETRY_STATUSES.has(res.status) || attempt === maxRetries) throw err;
       lastError = err;
       const serverDelay = retryAfterMs(res.headers);
@@ -110,33 +114,87 @@ function backoff(attempt: number): number {
   return base - jitter;
 }
 
-function describeStatus(status: number, body: unknown): string {
-  const detail =
-    body && typeof body === "object" && "detail" in body
-      ? JSON.stringify((body as { detail: unknown }).detail).slice(0, 300)
-      : typeof body === "string"
-        ? body.slice(0, 300)
-        : "";
+/** Error detail from either host: TypeSafe sends `{detail}`, OpenRouter `{error: {message}}`. */
+function errorDetail(body: unknown): string {
+  if (body && typeof body === "object") {
+    if ("detail" in body) return JSON.stringify((body as { detail: unknown }).detail).slice(0, 300);
+    const msg = (body as { error?: { message?: unknown } }).error?.message;
+    if (typeof msg === "string") return msg.slice(0, 300);
+  }
+  return typeof body === "string" ? body.slice(0, 300) : "";
+}
+
+function describeStatus(status: number, body: unknown, label: string): string {
+  const detail = errorDetail(body);
   switch (status) {
     case 401:
-      return "401 Unauthorized: invalid TypeSafe API key.";
+      return `401 Unauthorized: invalid ${label} API key.`;
+    case 402:
+      return `402 Payment required: the ${label} account has no credits left. ${detail}`;
     case 403:
-      return "403 Forbidden: this key is not allowed to call the API.";
+      return `403 Forbidden: this key is not allowed to call the API. ${detail}`;
     case 422:
       return `422 Unprocessable: the request failed validation. ${detail}`;
     case 429:
-      return "429 Rate limited by TypeSafe.";
+      return `429 Rate limited by ${label}.`;
     case 529:
-      return "529 TypeSafe is overloaded.";
+      return `529 ${label} is overloaded.`;
     default:
-      return `HTTP ${status} from TypeSafe. ${detail}`;
+      return `HTTP ${status} from ${label}. ${detail}`;
   }
 }
 
-/** GET /v1/models — used by the options page "Test key" button. */
-export async function listModels(opts: Pick<ClientOptions, "apiKey" | "baseUrl" | "fetchImpl">) {
-  const url = `${(opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "")}/v1/models`;
-  const res = await (opts.fetchImpl ?? fetch)(url, { headers: { Authorization: `Bearer ${opts.apiKey.trim()}` } });
-  if (!res.ok) throw new TypeSafeError(describeStatus(res.status, await res.text().catch(() => "")), res.status);
+/** TypeSafe's GET /v1/models — used by the options page "Test key" button. */
+export async function listModels(opts: Pick<ClientOptions, "apiKey" | "fetchImpl">) {
+  const { label, baseUrl } = PROVIDER_INFO.typesafe;
+  const res = await (opts.fetchImpl ?? fetch)(`${baseUrl}/v1/models`, { headers: { Authorization: `Bearer ${opts.apiKey.trim()}` } });
+  if (!res.ok) throw new TypeSafeError(describeStatus(res.status, await res.text().catch(() => ""), label), res.status);
   return (await res.json()) as { models: { name: string; description: string; release_date: string }[] };
+}
+
+/** Subset of OpenRouter's GET /api/v1/key response that the key test looks at. */
+export interface OpenRouterKeyInfo {
+  label: string;
+  /** Credit limit in USD, null = unlimited. */
+  limit: number | null;
+  limit_remaining: number | null;
+  /** USD spent with this key so far. */
+  usage: number;
+  is_free_tier: boolean;
+}
+
+/**
+ * OpenRouter's GET /api/v1/key — used by the "Test key" button.
+ *
+ * OpenRouter's /v1/models has a different shape from TypeSafe's (the TypeSafe SDK rejects
+ * it), and a model list proves little anyway: the key endpoint says whether the key is
+ * valid AND whether it can still pay for requests.
+ */
+export async function openRouterKeyInfo(opts: Pick<ClientOptions, "apiKey" | "fetchImpl">): Promise<OpenRouterKeyInfo> {
+  const { label, baseUrl } = PROVIDER_INFO.openrouter;
+  const res = await (opts.fetchImpl ?? fetch)(`${baseUrl}/v1/key`, { headers: { Authorization: `Bearer ${opts.apiKey.trim()}` } });
+  if (!res.ok) {
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      body = undefined;
+    }
+    throw new TypeSafeError(describeStatus(res.status, body, label), res.status);
+  }
+  return ((await res.json()) as { data: OpenRouterKeyInfo }).data;
+}
+
+/**
+ * Turn a valid key's info into the verdict the options page shows after "Test key".
+ *
+ * Reaching this function means OpenRouter accepted the key. What is left to decide is
+ * whether that key can actually run the filter: Jev is a paid model, so a key without
+ * credit fails on the first post with a 402 — long after the user closed the options.
+ */
+export function openRouterKeyVerdict(info: OpenRouterKeyInfo): { ok: boolean; message: string } {
+  // TODO(niko): decide what "Test key" should report for a key OpenRouter accepted.
+  // Available: info.limit, info.limit_remaining (USD, null = no limit), info.usage,
+  // info.is_free_tier. Return ok:false to show it as an error in the options page.
+  return { ok: true, message: `Key works (${info.label || "OpenRouter"}).` };
 }

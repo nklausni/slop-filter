@@ -1,14 +1,16 @@
-// MV3 service worker. Owns the API key, the per-post cache, and session stats for both
-// platforms. The content script sends a PostState; this returns an Evaluation.
+// MV3 service worker. Owns the API keys, the per-post cache, and session stats for both
+// platforms. The content script sends a PostState; this returns an Evaluation. The content
+// script never sees a key: settings replies carry only `hasKey`.
 
 import { buildQuestions, buildState } from "../shared/questions/index.ts";
 import { buildEvaluation } from "../shared/scoring.ts";
-import { loadSettings, saveSettings } from "../shared/storage.ts";
-import { listModels, systemOne, TypeSafeError } from "../shared/typesafe.ts";
+import { activeKey, loadKeys, loadSettings, saveKeys, saveSettings } from "../shared/storage.ts";
+import { listModels, openRouterKeyInfo, openRouterKeyVerdict, systemOne, TypeSafeError } from "../shared/typesafe.ts";
 import {
   EMPTY_PLATFORM_STATS,
   EMPTY_STATS,
   PLATFORMS,
+  PROVIDER_INFO,
   type Evaluation,
   type Message,
   type MessageReply,
@@ -138,7 +140,10 @@ async function clearCache(): Promise<void> {
 // ---- the evaluation itself ----
 async function evaluate(post: PostState): Promise<Evaluation> {
   const settings = await loadSettings();
-  if (!settings.apiKey.trim()) throw new TypeSafeError("No TypeSafe API key set. Open the extension options.");
+  const provider = settings.provider;
+  const model = settings.models[provider];
+  const apiKey = await activeKey(provider);
+  if (!apiKey.trim()) throw new TypeSafeError(`No ${PROVIDER_INFO[provider].label} API key set. Open the extension options.`);
 
   const text = post.text.slice(0, settings.maxPostChars);
   const trimmed: PostState = {
@@ -149,7 +154,7 @@ async function evaluate(post: PostState): Promise<Evaluation> {
   // Build the request first so the cache key can be derived from it.
   const state = buildState(trimmed, settings.interests, settings.excludedTopics);
   const questions = buildQuestions(post.platform, settings.interests, settings.excludedTopics);
-  const key = cacheKey(post, { state, model: settings.model, questions });
+  const key = cacheKey(post, { state, model, questions });
   const cached = await cacheGet(key);
 
   let response: SystemOneResponse;
@@ -160,7 +165,7 @@ async function evaluate(post: PostState): Promise<Evaluation> {
   } else {
     await acquire();
     try {
-      response = await systemOne({ apiKey: settings.apiKey, model: settings.model }, state as never, questions);
+      response = await systemOne({ provider, apiKey, model }, state as never, questions);
     } finally {
       release();
     }
@@ -182,6 +187,9 @@ async function evaluate(post: PostState): Promise<Evaluation> {
     if (!fromCache) {
       ps.evaluated++;
       ps.inputTokens += evaluation.inputTokens;
+      const cost = response.usage?.cost;
+      if (typeof cost === "number" && Number.isFinite(cost)) ps.costUsd += cost;
+      else ps.unpricedTokens += evaluation.inputTokens;
       s.lastModel = evaluation.model;
     } else {
       ps.cacheHits++;
@@ -212,8 +220,8 @@ async function recordOutcome(platform: Platform, verdict: Evaluation["verdict"],
 }
 
 // ---- message router ----
-chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
-  handle(msg)
+chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
+  handle(msg, sender)
     .then(sendResponse)
     .catch((e: unknown) => {
       const error = e instanceof Error ? e.message : String(e);
@@ -225,7 +233,39 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
   return true; // keep the channel open for the async reply
 });
 
-async function handle(msg: Message): Promise<MessageReply> {
+/**
+ * True for the extension's own pages (options, popup), false for content scripts.
+ *
+ * `sender.tab` cannot tell them apart — the options page opens in a tab — but a content
+ * script's `sender.url` is the feed's URL, never a chrome-extension:// one.
+ */
+function fromExtensionPage(sender: chrome.runtime.MessageSender): boolean {
+  return sender.id === chrome.runtime.id && (sender.url ?? "").startsWith(chrome.runtime.getURL(""));
+}
+
+async function settingsReply(settings: Settings): Promise<MessageReply> {
+  const hasKey = !!(await activeKey(settings.provider)).trim();
+  return { ok: true, settings, hasKey };
+}
+
+/** Feed tabs the content script runs in; mirrors content_scripts.matches in the manifest. */
+const FEED_URLS = chrome.runtime.getManifest().content_scripts?.flatMap((cs) => cs.matches ?? []) ?? [];
+
+/**
+ * Push the current settings to every open feed tab.
+ *
+ * Replaces the content script's old chrome.storage.onChanged listener, which received
+ * every changed value in the area — the API key included — whenever it was saved.
+ */
+async function broadcastSettings(): Promise<void> {
+  const settings = await loadSettings();
+  const hasKey = !!(await activeKey(settings.provider)).trim();
+  const msg: Message = { kind: "settings-changed", settings, hasKey };
+  const tabs = await chrome.tabs.query({ url: FEED_URLS });
+  await Promise.all(tabs.map((t) => (t.id === undefined ? undefined : chrome.tabs.sendMessage(t.id, msg).catch(() => {}))));
+}
+
+async function handle(msg: Message, sender: chrome.runtime.MessageSender): Promise<MessageReply> {
   switch (msg.kind) {
     case "evaluate":
       return { ok: true, evaluation: await evaluate(msg.post) };
@@ -247,9 +287,20 @@ async function handle(msg: Message): Promise<MessageReply> {
       await chrome.storage.session.remove(LOG_KEY);
       return { ok: true };
     case "get-settings":
-      return { ok: true, settings: await loadSettings() };
-    case "set-settings":
-      return { ok: true, settings: await saveSettings(msg.patch) };
+      return settingsReply(await loadSettings());
+    case "set-settings": {
+      const reply = await settingsReply(await saveSettings(msg.patch));
+      await broadcastSettings();
+      return reply;
+    }
+    case "get-keys":
+      if (!fromExtensionPage(sender)) throw new Error("Keys are only readable from the options page.");
+      return { ok: true, keys: await loadKeys() };
+    case "set-keys":
+      if (!fromExtensionPage(sender)) throw new Error("Keys are only writable from the options page.");
+      await saveKeys(msg.keys);
+      await broadcastSettings();
+      return { ok: true };
     case "clear-cache":
       await clearCache();
       return { ok: true };
@@ -263,12 +314,17 @@ async function handle(msg: Message): Promise<MessageReply> {
       return { ok: true, recent: (got[RECENT_KEY] ?? []) as Evaluation[] };
     }
     case "test-key": {
+      if (msg.provider === "openrouter") {
+        const verdict = openRouterKeyVerdict(await openRouterKeyInfo({ apiKey: msg.apiKey }));
+        if (!verdict.ok) throw new TypeSafeError(verdict.message);
+        return { ok: true, message: verdict.message };
+      }
       const models = await listModels({ apiKey: msg.apiKey });
       const names = models.models.map((m) => m.name);
       if (msg.model && !names.includes(msg.model) && !/^jev-\d/.test(msg.model)) {
         throw new TypeSafeError(`Key works, but model "${msg.model}" is not listed. Available: ${names.join(", ")}`);
       }
-      return { ok: true };
+      return { ok: true, message: "Key works." };
     }
     default:
       throw new Error(`Unknown message kind ${(msg as { kind: string }).kind}`);
@@ -278,3 +334,13 @@ async function handle(msg: Message): Promise<MessageReply> {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.session.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});
 });
+
+// Keys live in storage.local, which content scripts can read by default. The content
+// script no longer needs storage at all, so lock it to extension pages and this worker.
+// Runs on every worker start; where Chrome does not support it for `local` this is a
+// no-op and the key is still kept out of everything the content script is sent.
+try {
+  chrome.storage.local.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});
+} catch {
+  /* unsupported */
+}

@@ -8,7 +8,8 @@
 //   npm run experiment -- --id short_joke       # one post, full answer dump
 //   npm run experiment -- --misses              # only rows that disagree with `expect`
 //
-// Needs TYPESAFE_API_KEY (loaded from .env by the npm script). Raw responses are cached in
+// Needs TYPESAFE_API_KEY, or OPENROUTER_API_KEY with `--provider openrouter` (both loaded
+// from .env by the npm script). Raw responses are cached in
 // temp/experiment-cache.json so re-scoring after editing weights or thresholds is FREE;
 // editing a question's wording changes the cache key and re-asks only that request.
 //
@@ -27,7 +28,16 @@ import {
 } from "../src/shared/questions/index.ts";
 import { compositeSlop, decide, extractAnswers } from "../src/shared/scoring.ts";
 import { systemOne } from "../src/shared/typesafe.ts";
-import { PLATFORMS, type Platform, type PostState, type Preset, type SystemOneResponse, type Verdict } from "../src/shared/types.ts";
+import {
+  PLATFORMS,
+  PROVIDER_INFO,
+  isProvider,
+  type Platform,
+  type PostState,
+  type Preset,
+  type SystemOneResponse,
+  type Verdict,
+} from "../src/shared/types.ts";
 
 interface Sample {
   id: string;
@@ -53,11 +63,21 @@ const onlyPlatform = argOf("--platform") as Platform | undefined;
 const onlyPreset = argOf("--preset") as Preset | undefined;
 const onlyId = argOf("--id");
 const onlyMisses = args.includes("--misses");
-const model = argOf("--model") ?? process.env.TYPESAFE_DEFAULT_MODEL ?? "jev-1.13.0";
+const providerArg = argOf("--provider") ?? process.env.SLOP_PROVIDER ?? "typesafe";
+if (!isProvider(providerArg)) {
+  console.error(`Unknown provider "${providerArg}". Use typesafe or openrouter.`);
+  process.exit(1);
+}
+const provider = providerArg;
+const model =
+  argOf("--model") ??
+  (provider === "typesafe" ? process.env.TYPESAFE_DEFAULT_MODEL : undefined) ??
+  PROVIDER_INFO[provider].defaultModel;
 
-const apiKey = process.env.TYPESAFE_API_KEY ?? "";
+const keyVar = provider === "openrouter" ? "OPENROUTER_API_KEY" : "TYPESAFE_API_KEY";
+const apiKey = process.env[keyVar] ?? "";
 if (!apiKey) {
-  console.error("TYPESAFE_API_KEY is not set. Put it in .env (see .env.example).");
+  console.error(`${keyVar} is not set. Put it in .env (see .env.example).`);
   process.exit(1);
 }
 
@@ -100,7 +120,7 @@ async function ask(post: PostState): Promise<{ response: SystemOneResponse; cach
   const k = key(state, questions);
   if (cache[k]) return { response: cache[k], cached: true, ms: 0 };
   const t0 = performance.now();
-  const response = await systemOne({ apiKey, model }, state as never, questions);
+  const response = await systemOne({ provider, apiKey, model }, state as never, questions);
   const ms = performance.now() - t0;
   cache[k] = response;
   writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 1));

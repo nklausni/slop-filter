@@ -2,7 +2,8 @@
 
 One Chrome extension that hides AI slop on **X** and **LinkedIn** and highlights posts
 about things you care about. Each post is judged once by [TypeSafe](https://typesafe.ai)'s
-Jev model; your code (this repo) decides what to do with the probabilities.
+Jev model, either directly or through [OpenRouter](https://openrouter.ai/~typesafe/jev-latest);
+your code (this repo) decides what to do with the probabilities.
 
 > **Status: early.** Tested live on one person's feeds, with 40 labelled sample posts and
 > a unit-test suite. It works, and it has not been used by anyone else yet. Read
@@ -20,9 +21,10 @@ Jev model; your code (this repo) decides what to do with the probabilities.
 
 ## Privacy
 
-**The text of every evaluated post is sent to `api.typesafe.ai`** — including posts from
+**The text of every evaluated post is sent to the provider you pick** — `openrouter.ai`,
+which forwards it to TypeSafe, or `api.typesafe.ai` directly — including posts from
 private connections and members-only groups. There is no server belonging to this project;
-your API key and settings live in `chrome.storage.local` on your own profile.
+your API keys and settings live in `chrome.storage.local` on your own profile.
 
 What is sent: the post's text, the quoted post's text on X, and boolean flags for
 repost / media / link. What is not sent: engagement counts, author names or handles, URLs,
@@ -32,8 +34,8 @@ Posts are **not** sent at all when they are promoted, a reply (when that option 
 from an allowlisted handle, or shorter than the platform's minimum length. Answers are
 cached per post for the browser session, so the same post is never sent twice.
 
-See TypeSafe's [terms and data handling](https://docs.typesafe.ai/legal) for what happens
-to a request once it arrives.
+See TypeSafe's [terms and data handling](https://docs.typesafe.ai/legal) and OpenRouter's
+[privacy policy](https://openrouter.ai/privacy) for what happens to a request once it arrives.
 
 ## Install (unpacked)
 
@@ -43,12 +45,29 @@ npm run build          # → dist/
 ```
 
 1. `chrome://extensions` → **Developer mode** → **Load unpacked** → pick `dist/`.
-2. Click the extension → **Interests & settings**. Paste your TypeSafe API key (from
-   <https://console.typesafe.ai/keys>), **Test key**, add interests, **Save**.
+2. Click the extension → **Interests & settings**. Pick a provider and paste its key:
+   - **OpenRouter** (default): key from <https://openrouter.ai/settings/keys>, model
+     `~typesafe/jev-latest`. Billed to your OpenRouter credits.
+   - **TypeSafe**: key from <https://console.typesafe.ai/keys>, model `jev-1.13.0`.
+
+   **Test key**, add interests, **Save**.
 3. Open <https://x.com/home> or <https://www.linkedin.com/feed/>.
 
-The key is stored in `chrome.storage.local` on this profile and only ever sent to
-`api.typesafe.ai`.
+Each key is stored in `chrome.storage.local` under its own entry, apart from the other
+settings, and only ever sent to its own provider's host (fixed in code, not configurable).
+The content script running on X and LinkedIn never receives a key: settings reach it
+from the service worker with only a `hasKey` flag.
+
+### Why OpenRouter works unchanged
+
+Jev is not a chat model, and OpenRouter's chat-completions endpoint cannot serve it.
+OpenRouter runs a **System One API** at `https://openrouter.ai/api/v1/systemone` that takes
+the same `state` + `questions` body and returns the same typed answers as TypeSafe, plus
+`usage.cost` in USD, which the popup shows instead of an estimate. So the questions, the
+scorer and the thresholds are shared; only the host, the key and the model id differ.
+
+`~typesafe/jev-latest` follows new Jev releases (currently Jev 1.13, which the thresholds
+are fitted to). Set the model to `typesafe/jev-1.13` to pin it.
 
 ## What's shared and what isn't
 
@@ -120,8 +139,9 @@ because the model counts badly and a regex counts exactly.
 ## Tune it
 
 ```bash
-cp .env.example .env                        # TYPESAFE_API_KEY
+cp .env.example .env                        # TYPESAFE_API_KEY and/or OPENROUTER_API_KEY
 npm run experiment                          # both platforms, all presets
+npm run experiment -- --provider openrouter # same, billed to OpenRouter
 npm run experiment -- --platform linkedin
 npm run experiment -- --misses              # only rows that disagree with expect
 npm run experiment -- --id humble_brag      # one post, full raw answers
@@ -244,7 +264,8 @@ src/shared/questions/x.ts           X signals, substance scale, thresholds   ←
 src/shared/questions/linkedin.ts    LinkedIn ditto
 src/shared/questions/policy.ts      the Policy shape
 src/shared/scoring.ts               answers → verdict (pure; no I/O, no chrome.*)
-src/shared/typesafe.ts              fetch client for POST /v1/systemone with backoff
+src/shared/typesafe.ts              fetch client for POST /v1/systemone (TypeSafe or OpenRouter)
+src/shared/storage.ts               settings + separately stored API keys, legacy migration
 src/platforms/x.ts                  X DOM adapter
 src/platforms/linkedin.ts           LinkedIn DOM adapter (SDUI + classic layouts)
 src/content/content.ts              one scan loop, adapter chosen by hostname
@@ -277,7 +298,7 @@ Nothing leaves the browser: the log is session-scoped local storage.
 ## Tests
 
 ```bash
-npm test          # 29 unit tests, ~300ms, no API key required
+npm test          # 37 unit tests, ~300ms, no API key required
 npm run typecheck
 ```
 

@@ -7,7 +7,7 @@
 // costs nothing and removes a whole class of "works on one, subtly broken on the other".
 
 import { ADAPTERS, detectPlatform, type PlatformAdapter } from "../platforms/index.ts";
-import type { Evaluation, Platform, PlatformSettings, SessionStats, Settings, Verdict } from "../shared/types.ts";
+import type { Evaluation, Message, Platform, PlatformSettings, SessionStats, Settings, Verdict } from "../shared/types.ts";
 import { DEFAULT_PLATFORM_SETTINGS, DEFAULT_SETTINGS } from "../shared/types.ts";
 
 /** Injected by scripts/build.mjs so two builds of the same version are distinguishable. */
@@ -31,6 +31,8 @@ const CLS = {
 const platform: Platform | null = detectPlatform();
 let adapter: PlatformAdapter;
 let settings: Settings = { ...DEFAULT_SETTINGS };
+/** Whether the active provider has a key. The key itself never reaches this script. */
+let hasKey = false;
 const revealedIds = new Set<string>();
 const reported = new Set<string>();
 let scanTimer: number | undefined;
@@ -321,19 +323,28 @@ async function init(): Promise<void> {
   adapter = ADAPTERS[platform];
 
   try {
-    const reply = await send<{ settings: Settings }>({ kind: "get-settings" });
+    const reply = await send<{ settings: Settings; hasKey: boolean }>({ kind: "get-settings" });
     settings = reply.settings;
+    hasKey = reply.hasKey;
   } catch {
     /* keep defaults */
   }
 
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local" || !changes.settings) return;
+  // Settings changes are pushed by the service worker rather than read from
+  // chrome.storage.onChanged: that event carries every changed value in the area, so a
+  // listener here would receive the API key whenever it is saved. This script never
+  // touches chrome.storage at all, which lets the worker lock storage to trusted contexts.
+  chrome.runtime.onMessage.addListener((msg: Message) => {
+    if (msg?.kind !== "settings-changed") return;
     const prev = settings;
-    settings = { ...DEFAULT_SETTINGS, ...(changes.settings.newValue as Partial<Settings>) };
-    // Anything that changes verdicts or presentation → re-evaluate everything.
+    const prevHasKey = hasKey;
+    settings = { ...DEFAULT_SETTINGS, ...msg.settings };
+    hasKey = msg.hasKey;
+    // Anything that changes verdicts or presentation → re-evaluate everything. A key that
+    // just appeared (or a provider switch) retries posts that failed without one.
     const changed =
-      (["enabled", "highlightInterests", "interests", "excludedTopics", "hideMode", "showBadges", "model", "apiKey", "maxPostChars", "allowHandles"] as const).some(
+      hasKey !== prevHasKey ||
+      (["enabled", "highlightInterests", "interests", "excludedTopics", "hideMode", "showBadges", "provider", "models", "maxPostChars", "allowHandles"] as const).some(
         (k) => JSON.stringify(prev[k]) !== JSON.stringify(settings[k]),
       ) || JSON.stringify(prev.platforms?.[platform]) !== JSON.stringify(settings.platforms?.[platform]);
     if (changed) {

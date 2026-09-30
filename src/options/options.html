@@ -11,21 +11,35 @@
       <p class="help">Works on <strong>X</strong> and <strong>LinkedIn</strong>. Interests, excluded topics and the API key are shared; strictness and length limits are set per platform.</p>
 
       <section>
-        <h2>TypeSafe API key</h2>
+        <h2>API provider &amp; key</h2>
         <p class="help">
-          Get a key at <a href="https://console.typesafe.ai/keys" target="_blank" rel="noreferrer">console.typesafe.ai/keys</a>.
-          It is stored only in this browser profile (<code>chrome.storage.local</code>) and sent only to
-          <code>api.typesafe.ai</code>.
+          Both providers run TypeSafe's Jev model through the same System One API, so the answers and thresholds are
+          the same. OpenRouter bills your OpenRouter credits; TypeSafe bills a TypeSafe account.
         </p>
         <div class="row">
-          <input type="password" id="apiKey" placeholder="ts-…" autocomplete="off" spellcheck="false" />
+          <label for="provider">Provider</label>
+          <select id="provider">
+            <option value="openrouter">OpenRouter</option>
+            <option value="typesafe">TypeSafe (direct)</option>
+          </select>
+        </div>
+        <p class="help">
+          Get a key at <a id="keyLink" href="#" target="_blank" rel="noreferrer"></a>.
+          It is stored only in this browser profile (<code>chrome.storage.local</code>, separate from the other settings)
+          and sent only to <code id="keyHost"></code>.
+        </p>
+        <div class="row">
+          <input type="password" id="apiKey" autocomplete="off" spellcheck="false" />
           <button type="button" id="toggleKey">Show</button>
           <button type="button" id="testKey">Test key</button>
         </div>
         <div class="row">
           <label for="model">Model</label>
-          <input type="text" id="model" placeholder="jev-1.13.0" />
-          <span class="help">Pin a version once you are happy with the thresholds; <code>jev-latest</code> moves.</span>
+          <input type="text" id="model" />
+          <span class="help">
+            The thresholds are fitted to Jev 1.13. <code>jev-latest</code> follows new releases; pin a version
+            (<code id="pinnedModel"></code>) to freeze the scale.
+          </span>
         </div>
         <div id="keyStatus" class="status"></div>
       </section>
@@ -127,7 +141,7 @@
       <section class="about">
         <h2>How it decides</h2>
         <p>
-          Each post goes to TypeSafe's Jev model in <strong>one request</strong> carrying: a holistic
+          Each post goes to TypeSafe's Jev model (directly or via OpenRouter) in <strong>one request</strong> carrying: a holistic
           <code>Choice</code> asking simply whether the post is slop, a battery of narrow yes/no questions
           (engagement bait, machine-generated prose, rage bait, selling, self-promotion, empty wisdom, recycled
           content, plus platform-specific ones), a graded “substance” score, and one question per interest and
@@ -143,20 +157,23 @@
         </p>
         <h2>What leaves your browser</h2>
         <p class="warn">
-          <strong>The text of every evaluated post is sent to <code>api.typesafe.ai</code></strong> — including posts
-          from private connections and members-only groups. Nothing else goes anywhere: no engagement counts, no
+          <strong>The text of every evaluated post is sent to the selected provider</strong> —
+          <code>openrouter.ai</code>, which forwards it to TypeSafe, or <code>api.typesafe.ai</code> directly —
+          including posts from private connections and members-only groups. Nothing else goes anywhere: no engagement counts, no
           author names, no browsing history, and there is no server belonging to this extension. Answers are cached in
           this browser for the session so the same post is not sent twice.
         </p>
         <p class="help">
           Posts are <em>not</em> sent when they are promoted, a reply (if that is enabled), from an allowlisted handle,
-          or shorter than the platform's minimum length. See TypeSafe's own
-          <a href="https://docs.typesafe.ai/legal" target="_blank" rel="noreferrer">terms and data handling</a> for what
-          they do with a request.
+          or shorter than the platform's minimum length. See TypeSafe's
+          <a href="https://docs.typesafe.ai/legal" target="_blank" rel="noreferrer">terms and data handling</a> and
+          OpenRouter's <a href="https://openrouter.ai/privacy" target="_blank" rel="noreferrer">privacy policy</a> for
+          what they do with a request.
         </p>
         <p class="help">
-          Roughly 3,000–3,500 input tokens per post, about $0.00014 at current prices — billed to your own TypeSafe
-          key. Moving the strictness slider re-scores cached answers, so it costs nothing.
+          Roughly 3,000–3,500 input tokens per post, about $0.00014 at current prices — billed to your own key.
+          With OpenRouter the popup shows the exact cost it reports. Moving the strictness slider re-scores cached
+          answers, so it costs nothing.
         </p>
       </section>
     </main>

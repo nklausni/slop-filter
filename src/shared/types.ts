@@ -1,4 +1,6 @@
-// Wire types for POST https://api.typesafe.ai/v1/systemone (docs: https://docs.typesafe.ai/api)
+// Wire types for POST /v1/systemone (docs: https://docs.typesafe.ai/api). The same shape is
+// served by TypeSafe directly and by OpenRouter's System One API; OpenRouter adds `id`,
+// `provider` and `usage.cost` to the response.
 
 export type EntryType = string | JsonValue[] | { [key: string]: JsonValue } | null;
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -48,8 +50,59 @@ export interface SystemOneRequest {
 export interface SystemOneResponse {
   model: string;
   answers: Record<string, Answer>;
-  usage: { input_tokens: number; output_tokens: number };
+  /** `cost` is USD and only reported by OpenRouter. */
+  usage: { input_tokens: number; output_tokens: number; cost?: number };
+  id?: string;
+  provider?: string;
 }
+
+// ---------------------------------------------------------------------------
+// API providers
+// ---------------------------------------------------------------------------
+
+export const PROVIDERS = ["typesafe", "openrouter"] as const;
+export type Provider = (typeof PROVIDERS)[number];
+
+export interface ProviderInfo {
+  label: string;
+  /** Fixed in code on purpose: no setting can redirect the key to another host. */
+  baseUrl: string;
+  defaultModel: string;
+  keyUrl: string;
+  keyPlaceholder: string;
+}
+
+export const PROVIDER_INFO: Record<Provider, ProviderInfo> = {
+  typesafe: {
+    label: "TypeSafe",
+    baseUrl: "https://api.typesafe.ai",
+    defaultModel: "jev-1.13.0",
+    keyUrl: "https://console.typesafe.ai/keys",
+    keyPlaceholder: "ts-…",
+  },
+  openrouter: {
+    label: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api",
+    // Moves with new Jev releases (currently Jev 1.13). Pin `typesafe/jev-1.13` to freeze
+    // the scale the thresholds were fitted to.
+    defaultModel: "~typesafe/jev-latest",
+    keyUrl: "https://openrouter.ai/settings/keys",
+    keyPlaceholder: "sk-or-v1-…",
+  },
+};
+
+export function isProvider(v: unknown): v is Provider {
+  return typeof v === "string" && (PROVIDERS as readonly string[]).includes(v);
+}
+
+/**
+ * API keys, stored apart from Settings under their own storage key.
+ *
+ * Settings travel to the content script (via `get-settings` and `storage.onChanged`);
+ * keys must not. Only the service worker and the options page ever read them.
+ */
+export type ApiKeys = Record<Provider, string>;
+export const EMPTY_KEYS: ApiKeys = { typesafe: "", openrouter: "" };
 
 // ---------------------------------------------------------------------------
 // Platforms
@@ -126,8 +179,10 @@ export interface PlatformSettings {
 export interface Settings {
   /** Master switch; each platform also has its own. */
   enabled: boolean;
-  apiKey: string;
-  model: string;
+  /** Which host receives the requests. The key for it lives in ApiKeys, not here. */
+  provider: Provider;
+  /** Model id per provider; the two use different naming. */
+  models: Record<Provider, string>;
   /** Shared across platforms — the same person cares about the same things on both. */
   interests: string[];
   excludedTopics: string[];
@@ -149,8 +204,8 @@ export const DEFAULT_PLATFORM_SETTINGS: Record<Platform, PlatformSettings> = {
 
 export const DEFAULT_SETTINGS: Settings = {
   enabled: true,
-  apiKey: "",
-  model: "jev-1.13.0",
+  provider: "openrouter",
+  models: { typesafe: PROVIDER_INFO.typesafe.defaultModel, openrouter: PROVIDER_INFO.openrouter.defaultModel },
   interests: [],
   excludedTopics: [],
   allowHandles: [],
@@ -170,6 +225,10 @@ export interface PlatformStats {
   skipped: number;
   cacheHits: number;
   inputTokens: number;
+  /** USD as reported by the provider (OpenRouter reports it, TypeSafe does not). */
+  costUsd: number;
+  /** Tokens from responses without a reported cost; the popup estimates these. */
+  unpricedTokens: number;
 }
 
 export const EMPTY_PLATFORM_STATS: PlatformStats = {
@@ -181,6 +240,8 @@ export const EMPTY_PLATFORM_STATS: PlatformStats = {
   skipped: 0,
   cacheHits: 0,
   inputTokens: 0,
+  costUsd: 0,
+  unpricedTokens: 0,
 };
 
 export interface SessionStats {
@@ -241,7 +302,11 @@ export type Message =
   | { kind: "reset-stats" }
   | { kind: "get-settings" }
   | { kind: "set-settings"; patch: Partial<Settings> }
-  | { kind: "test-key"; apiKey: string; model: string }
+  | { kind: "test-key"; provider: Provider; apiKey: string; model: string }
+  | { kind: "get-keys" }
+  | { kind: "set-keys"; keys: Partial<ApiKeys> }
+  /** Service worker → content scripts, after any settings or key change. Never carries a key. */
+  | { kind: "settings-changed"; settings: Settings; hasKey: boolean }
   | { kind: "clear-cache" }
   | { kind: "get-recent" }
   | { kind: "get-log" }
@@ -250,7 +315,9 @@ export type Message =
 export type MessageReply =
   | { ok: true; evaluation: Evaluation }
   | { ok: true; stats: SessionStats }
-  | { ok: true; settings: Settings }
+  | { ok: true; settings: Settings; hasKey: boolean }
+  | { ok: true; keys: ApiKeys }
+  | { ok: true; message: string }
   | { ok: true; recent: Evaluation[] }
   | { ok: true; log: LogEntry[] }
   | { ok: true; stats: SessionStats; log: LogEntry[] }

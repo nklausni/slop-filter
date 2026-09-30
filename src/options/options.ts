@@ -1,4 +1,15 @@
-import { PLATFORMS, type Platform, type PlatformSettings, type Preset, type Settings } from "../shared/types.ts";
+import {
+  EMPTY_KEYS,
+  PLATFORMS,
+  PROVIDER_INFO,
+  isProvider,
+  type ApiKeys,
+  type Platform,
+  type PlatformSettings,
+  type Preset,
+  type Provider,
+  type Settings,
+} from "../shared/types.ts";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -24,10 +35,43 @@ function setStatus(el: HTMLElement, text: string, kind: "ok" | "err" | ""): void
   el.className = `status ${kind}`;
 }
 
+// The key and model inputs show whichever provider is selected; edits to the other one
+// are kept here until Save so switching back and forth loses nothing.
+let provider: Provider = "openrouter";
+const keyDrafts: ApiKeys = { ...EMPTY_KEYS };
+const modelDrafts = {} as Record<Provider, string>;
+
+function stashProviderInputs(): void {
+  keyDrafts[provider] = $<HTMLInputElement>("apiKey").value.trim();
+  modelDrafts[provider] = $<HTMLInputElement>("model").value.trim();
+}
+
+function showProvider(p: Provider): void {
+  provider = p;
+  const info = PROVIDER_INFO[p];
+  $<HTMLSelectElement>("provider").value = p;
+  const link = $<HTMLAnchorElement>("keyLink");
+  link.href = info.keyUrl;
+  link.textContent = info.keyUrl.replace(/^https:\/\//, "");
+  $("keyHost").textContent = new URL(info.baseUrl).host;
+  $("pinnedModel").textContent = p === "openrouter" ? "typesafe/jev-1.13" : "jev-1.13.0";
+  const key = $<HTMLInputElement>("apiKey");
+  key.placeholder = info.keyPlaceholder;
+  key.value = keyDrafts[p];
+  const model = $<HTMLInputElement>("model");
+  model.placeholder = info.defaultModel;
+  model.value = modelDrafts[p] ?? info.defaultModel;
+  setStatus($("keyStatus"), "", "");
+}
+
 async function load(): Promise<void> {
-  const { settings } = await send<{ settings: Settings }>({ kind: "get-settings" });
-  $<HTMLInputElement>("apiKey").value = settings.apiKey;
-  $<HTMLInputElement>("model").value = settings.model;
+  const [{ settings }, { keys }] = await Promise.all([
+    send<{ settings: Settings }>({ kind: "get-settings" }),
+    send<{ keys: ApiKeys }>({ kind: "get-keys" }),
+  ]);
+  Object.assign(keyDrafts, keys);
+  Object.assign(modelDrafts, settings.models);
+  showProvider(settings.provider);
   $<HTMLTextAreaElement>("interests").value = settings.interests.join("\n");
   $<HTMLTextAreaElement>("excludedTopics").value = settings.excludedTopics.join("\n");
   $<HTMLTextAreaElement>("allowHandles").value = settings.allowHandles.map((h) => `@${h}`).join("\n");
@@ -57,9 +101,13 @@ async function save(): Promise<void> {
   const platforms = {} as Record<Platform, PlatformSettings>;
   for (const p of PLATFORMS) platforms[p] = readPlatform(p);
 
+  stashProviderInputs();
+  const models = {} as Record<Provider, string>;
+  for (const p of Object.keys(PROVIDER_INFO) as Provider[]) models[p] = modelDrafts[p] || PROVIDER_INFO[p].defaultModel;
+
   const patch: Partial<Settings> = {
-    apiKey: $<HTMLInputElement>("apiKey").value.trim(),
-    model: $<HTMLInputElement>("model").value.trim() || "jev-1.13.0",
+    provider,
+    models,
     interests: linesOf($<HTMLTextAreaElement>("interests").value),
     excludedTopics: linesOf($<HTMLTextAreaElement>("excludedTopics").value),
     allowHandles: linesOf($<HTMLTextAreaElement>("allowHandles").value).map((h) => h.replace(/^@/, "").toLowerCase()),
@@ -69,6 +117,8 @@ async function save(): Promise<void> {
     platforms,
   };
   try {
+    // Keys first: the settings save broadcasts to open feeds, which should then find a key.
+    await send({ kind: "set-keys", keys: keyDrafts });
     await send({ kind: "set-settings", patch });
     setStatus($("saveStatus"), "Saved. Open X or LinkedIn and the feed will re-evaluate.", "ok");
   } catch (e) {
@@ -77,6 +127,12 @@ async function save(): Promise<void> {
 }
 
 $("save").addEventListener("click", () => void save());
+$("provider").addEventListener("change", (e) => {
+  const next = (e.target as HTMLSelectElement).value;
+  if (!isProvider(next)) return;
+  stashProviderInputs();
+  showProvider(next);
+});
 $("toggleKey").addEventListener("click", () => {
   const input = $<HTMLInputElement>("apiKey");
   input.type = input.type === "password" ? "text" : "password";
@@ -86,12 +142,13 @@ $("testKey").addEventListener("click", async () => {
   const status = $("keyStatus");
   setStatus(status, "Testing…", "");
   try {
-    await send({
+    const { message } = await send<{ message: string }>({
       kind: "test-key",
+      provider,
       apiKey: $<HTMLInputElement>("apiKey").value.trim(),
       model: $<HTMLInputElement>("model").value.trim(),
     });
-    setStatus(status, "Key works.", "ok");
+    setStatus(status, message, "ok");
   } catch (e) {
     setStatus(status, (e as Error).message, "err");
   }
